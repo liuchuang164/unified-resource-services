@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+.vitest/
+*.log
+.env
+.env.*
+!.env.example
+config.txt
+*.pem
+*.key
+.DS_Store
+.idea/
+.vscode/
+.pnpm-store/
+.tmp/
+tmp/
