@@ -12,6 +12,30 @@
 
 Agent Tool API 只是服务的一种调用适配层，不能成为服务的内部架构中心。
 
+### 1.1 Data Control Service 的 Codex 必读材料
+
+任何修改 `services/data-control-service/**` 的 Codex、AI Coding Agent 或人工开发者，开始工作前必须完整阅读：
+
+1. 本文件；
+2. `services/data-control-service/AGENTS.md`；
+3. `services/data-control-service/VIBE_CODING_CONSTRAINTS.md`；
+4. `services/data-control-service/VIBE_CODING.md`；
+5. `docs/architecture/data-control-service-architecture-original.png`；
+6. `docs/architecture/data-control-service-architecture.md`。
+
+用户提供的原始架构图是该服务的架构事实源。文字文档只能解释和细化，不能改变图中调用方向、层级职责、统一入口、审计链路和 Adapter 范围。
+
+历史 `claria/main/data-access-gateway` 仅是只读参考，不是目标架构。禁止因复用旧代码而让旧仓库的结构、接口、数据库类型或信任模型覆盖原始架构图。
+
+### 1.2 任务模式护栏
+
+必须先识别当前任务模式：
+
+- **约束维护模式**：当用户要求补充约束、整理 Vibe Coding 规则、上传架构图或完善 Codex 任务书时，只能修改文档、`AGENTS.md`、架构原图及其校验说明；禁止修改 `src/`、业务测试、迁移、运行依赖、Dockerfile、部署清单和业务配置。
+- **实现模式**：只有用户明确要求实现某个 Phase、垂直切片或功能时，才可以修改业务代码，并且只能实现被点名的范围。
+
+不得把“为 Codex 准备约束”误解成“直接替 Codex 开发业务功能”。
+
 ## 2. 微服务硬边界
 
 必须：
