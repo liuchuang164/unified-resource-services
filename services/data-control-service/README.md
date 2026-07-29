@@ -15,19 +15,33 @@ uvicorn data_control_service.main:app --reload
 
 ```bash
 docker compose -f docker-compose.postgresql.yml --profile dev up -d
-CONTROL_DATABASE_MIGRATION_URL=postgresql+psycopg://data_control:change_me@localhost:5432/data_control alembic upgrade head
+CONTROL_DATABASE_MIGRATION_URL=postgresql+psycopg://data_control:change_me@localhost:5432/data_control alembic -c alembic-control.ini upgrade head
+TARGET_DATABASE_MIGRATION_URL=postgresql+psycopg://data_control:change_me@localhost:5432/data_target alembic -c alembic-target.ini upgrade head
 CONTROL_DATABASE_URL=postgresql+asyncpg://data_control:change_me@localhost:5432/data_control python scripts/bootstrap_postgresql.py
 ```
 
 Use `CONTROL_DATABASE_URL` for service control-plane tables and `POSTGRESQL_ADAPTER_DATABASE_URL` for target PostgreSQL data. Development may point both to the same PostgreSQL instance, but control-plane tables live in `control_plane` and example target data lives in `data_target`.
 
+Phase 2.1 splits Alembic history:
+
+```bash
+alembic -c alembic-control.ini current
+alembic -c alembic-target.ini current
+alembic -c alembic-control.ini downgrade -1
+alembic -c alembic-target.ini downgrade -1
+```
+
+`alembic.ini` is deprecated and retained only for Phase 2 combined-chain transition reference. Existing Phase 2 databases should use `scripts/stamp_split_migrations.py` after verifying that control-plane tables and target tables already exist.
+
 ## Test
 
 ```bash
 ruff check .
+ruff format --check .
 mypy src
 pytest -q
 pytest -m postgresql -q
+pytest -m reliability -q
 pytest --cov=src --cov-report=term-missing
 ```
 
