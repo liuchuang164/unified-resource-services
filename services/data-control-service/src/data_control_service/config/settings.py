@@ -11,9 +11,11 @@ class Settings(BaseSettings):
     auth_provider: str = "development"
     control_database_url: str | None = None
     control_database_migration_url: str | None = None
+    control_migration_head_revision: str = "0004"
     postgresql_adapter_enabled: bool = False
     postgresql_adapter_required: bool = True
     postgresql_adapter_database_url: str | None = None
+    target_migration_head_revision: str = "target_0001"
     database_pool_size: int = Field(default=10, ge=1)
     database_max_overflow: int = Field(default=20, ge=0)
     database_pool_timeout_seconds: int = Field(default=30, ge=1)

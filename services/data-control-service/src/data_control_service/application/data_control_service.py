@@ -17,6 +17,7 @@ from data_control_service.domain.models import (
     ExecutionContext,
     RouteDecision,
 )
+from data_control_service.infrastructure.observability.metrics import metrics_registry
 from data_control_service.ports.audit_repository import AuditRepository
 from data_control_service.ports.auth_provider import AuthenticatedPrincipal, RequestContext
 
@@ -195,8 +196,16 @@ class DataControlService:
                 "status": "ok" if ok else "error",
                 "required": health.required,
             }
+        state = "READY"
+        if not ready:
+            state = "NOT_READY"
+        elif degraded:
+            state = "DEGRADED"
+        metrics_registry.set_gauge(
+            "readiness_state", {"READY": 2.0, "DEGRADED": 1.0, "NOT_READY": 0.0}[state]
+        )
         return {
-            "status": "ready" if ready else "not_ready",
+            "status": state,
             "ready": ready,
             "degraded": degraded,
             "components": components,

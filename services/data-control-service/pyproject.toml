@@ -40,6 +40,7 @@ markers = [
   "postgresql: requires a real PostgreSQL 16 database",
   "migration: exercises Alembic migrations",
   "performance: records development-only baseline timings",
+  "reliability: exercises real PostgreSQL reliability behavior",
 ]
 
 [tool.ruff]

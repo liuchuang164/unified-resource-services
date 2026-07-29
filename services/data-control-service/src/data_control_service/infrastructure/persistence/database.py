@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -13,6 +14,7 @@ from sqlalchemy.pool import NullPool
 
 from data_control_service.config.settings import Settings
 from data_control_service.domain.exceptions import DataControlError
+from data_control_service.infrastructure.observability.metrics import metrics_registry
 
 
 def redact_database_url(url: str | None) -> str:
@@ -68,9 +70,41 @@ class DatabaseManager:
             async with self.engine.connect() as connection:
                 await connection.execute(text("SELECT 1"))
             return {"status": "ok", "database": self._name}
+        except SQLAlchemyTimeoutError as exc:
+            metrics_registry.increment("postgresql_pool_timeout_total")
+            raise DataControlError(
+                "ADAPTER_UNAVAILABLE", f"{self._name} database pool unavailable"
+            ) from exc
         except Exception as exc:
+            metrics_registry.increment("postgresql_connection_failure_total")
             raise DataControlError(
                 "ADAPTER_UNAVAILABLE", f"{self._name} database unavailable"
+            ) from exc
+
+    async def migration_current(self, *, schema: str, expected_revision: str) -> dict[str, str]:
+        version_tables = {
+            "control_plane": '"control_plane".alembic_version',
+            "data_target": '"data_target".alembic_version',
+        }
+        version_table = version_tables.get(schema)
+        if version_table is None:
+            raise DataControlError("CONFIGURATION_INVALID", "unknown migration schema")
+        try:
+            async with self.engine.connect() as connection:
+                result = await connection.execute(
+                    text(f"SELECT version_num FROM {version_table}")  # noqa: S608
+                )
+                revision = result.scalar_one_or_none()
+            if revision != expected_revision:
+                raise DataControlError(
+                    "CONFIGURATION_INVALID", f"{self._name} migration revision mismatch"
+                )
+            return {"status": "ok", "revision": "head"}
+        except DataControlError:
+            raise
+        except Exception as exc:
+            raise DataControlError(
+                "CONFIGURATION_INVALID", f"{self._name} migration revision unavailable"
             ) from exc
 
     async def close(self) -> None:

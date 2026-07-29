@@ -65,6 +65,18 @@ def get_target_postgresql_manager() -> DatabaseManager | None:
     )
 
 
+async def close_database_managers() -> None:
+    control_database = get_control_database_manager()
+    target_database = get_target_postgresql_manager()
+    if control_database is not None:
+        await control_database.close()
+    if target_database is not None and target_database is not control_database:
+        await target_database.close()
+    get_data_control_service.cache_clear()
+    get_control_database_manager.cache_clear()
+    get_target_postgresql_manager.cache_clear()
+
+
 @lru_cache
 def get_data_control_service() -> DataControlService:
     settings = get_settings()
@@ -92,6 +104,10 @@ def get_data_control_service() -> DataControlService:
     readiness_checks: dict[str, Callable[[], Awaitable[dict[str, str]]]] = {}
     if control_database is not None:
         readiness_checks["control_database"] = control_database.ping
+        readiness_checks["control_migration"] = lambda: control_database.migration_current(
+            schema="control_plane",
+            expected_revision=settings.control_migration_head_revision,
+        )
         readiness_checks["idempotency_repository"] = idempotency_repository.health
         readiness_checks["resource_mapping_repository"] = resource_repository.health
         if policy_repository is not None:
@@ -100,6 +116,10 @@ def get_data_control_service() -> DataControlService:
             readiness_checks["audit_repository"] = audit_repository.health
     if target_database is not None:
         readiness_checks["postgresql_adapter_database"] = target_database.ping
+        readiness_checks["target_migration"] = lambda: target_database.migration_current(
+            schema="data_target",
+            expected_revision=settings.target_migration_head_revision,
+        )
     return DataControlService(
         context_resolver=ContextResolver(),
         authorization_service=AuthorizationService(policy_repository),
