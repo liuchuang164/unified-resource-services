@@ -40,6 +40,9 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
     "AUTH_REQUIRED": ErrorSpec(
         401, False, ErrorCategory.AUTHENTICATION, "authentication is required"
     ),
+    "AUTH_TOKEN_INVALID": ErrorSpec(
+        401, False, ErrorCategory.AUTHENTICATION, "authentication credential is invalid"
+    ),
     "AUTH_SCOPE_MISMATCH": ErrorSpec(
         403, False, ErrorCategory.AUTHORIZATION, "request scope is not permitted"
     ),
@@ -67,6 +70,7 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
     "DATA_CONSTRAINT_VIOLATION": ErrorSpec(
         422, False, ErrorCategory.DATA, "data constraint violation"
     ),
+    "LOCK_CONFLICT": ErrorSpec(409, True, ErrorCategory.DATA, "resource lock conflict"),
     "TRANSACTION_NOT_SUPPORTED": ErrorSpec(
         422, False, ErrorCategory.TRANSACTION, "transaction is not supported"
     ),

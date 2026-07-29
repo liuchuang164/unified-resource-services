@@ -14,6 +14,18 @@ def reset_service_cache() -> None:
 async def client() -> AsyncClient:
     app = create_app()
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={
+            "x-dev-subject-id": "svc_demo",
+            "x-dev-tenant-id": "tenant_demo",
+            "x-dev-biz-domains": "demo",
+            "x-dev-permissions": (
+                "data:record:read,data:record:write,data:object:read,data:object:write,"
+                "data:cache:read,data:cache:write,data:graph:read,data:graph:write,"
+                "data:vector:read,data:vector:write,data:timeseries:read,"
+                "data:timeseries:write,data:high-risk:execute"
+            ),
+        },
     ) as async_client:
         yield async_client

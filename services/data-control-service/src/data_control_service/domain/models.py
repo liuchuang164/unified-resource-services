@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from data_control_service.contracts.enums import DataTarget, Operation, TransactionMode
+from data_control_service.domain.policies import ResourceMapping
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,8 @@ class ExecutionContext:
     source: str
     request_id: str
     trace_id: str
+    authenticated: bool
+    credential_source: str
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,7 @@ class RouteDecision:
     timeout_ms: int
     transaction_mode: TransactionMode
     policy_version: str
+    resource_mapping: ResourceMapping
 
 
 @dataclass(frozen=True)

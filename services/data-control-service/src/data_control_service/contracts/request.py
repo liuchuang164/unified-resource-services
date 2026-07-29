@@ -13,15 +13,19 @@ from data_control_service.contracts.enums import (
 )
 
 
+class Actor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=3, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    type: SubjectType
+
+
 class AuthContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    subject_id: str = Field(min_length=3, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
-    subject_type: SubjectType
     tenant_id: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     biz_domain: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
-    roles: list[str] = Field(default_factory=list, max_length=32)
-    permissions: list[str] = Field(default_factory=list, max_length=128)
+    actor: Actor
 
 
 class ResourceDescriptor(BaseModel):
