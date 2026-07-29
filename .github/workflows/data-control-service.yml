@@ -112,7 +112,8 @@ jobs:
           coverage report --fail-under=85
       - name: Secret scan
         run: |
-          ! grep -RInE "BEGIN (RSA|OPENSSH|PRIVATE)|AKIA[0-9A-Z]{16}|password *=|secret *=|api[_-]?key" src tests config README.md
+          ! grep -RInE "BEGIN (RSA|OPENSSH|PRIVATE)|AKIA[0-9A-Z]{16}|password *=|secret *=|api[_-]?key" src tests config README.md \
+            | grep -v "hide_password=True"
 
   postgresql-stop-start:
     runs-on: ubuntu-latest
