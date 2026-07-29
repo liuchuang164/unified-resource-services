@@ -1,7 +1,7 @@
 # 文件/音视频流式服务
 
-Phase 0 implements the control-plane architecture baseline and an in-memory runnable loop for
-tenant-scoped file initialization, stream sessions, and processing jobs.
+Phase 1 keeps the frozen control-plane contract and adds production PostgreSQL, Redis, and MinIO
+adapters. InMemory/Fake adapters remain available only for tests and explicit local development.
 
 ## Run locally
 
@@ -18,6 +18,36 @@ The development composition is deny-by-default. Its only explicit sample scopes 
 
 Never use these development rules in production.
 
+## Production infrastructure mode
+
+Start the local-only integration stack:
+
+```bash
+docker compose up -d
+export DATABASE_URL=postgresql+asyncpg://fms_local:fms_local_only@localhost:55432/file_media_stream
+.venv/bin/alembic upgrade head
+```
+
+Copy `.env.example` values into your secret-aware runtime, then set:
+
+```bash
+APP_ENV=production
+FMS_INFRASTRUCTURE_MODE=production
+.venv/bin/uvicorn file_media_stream_service.main:app
+```
+
+Production startup fails fast when PostgreSQL, Redis, or MinIO configuration is absent. It never
+falls back to InMemory/Fake adapters. `/health` reports process liveness only; `/ready` checks all
+three production dependencies and exposes only `ok` or `unavailable`.
+
+Migration verification:
+
+```bash
+.venv/bin/alembic upgrade head
+.venv/bin/alembic downgrade -1
+.venv/bin/alembic upgrade head
+```
+
 ## HTTP control plane
 
 - `GET /health`
@@ -27,8 +57,8 @@ Never use these development rules in production.
 - `GET /api/v1/tools/{tool_name}/schema`
 - `POST /api/v1/tools/execute`
 
-Media frames and file bytes never traverse these JSON endpoints. Phase 0 uses only in-memory/fake
-ports; PostgreSQL, Redis, MinIO, media servers, and processors remain later-phase integrations.
+Media frames and file bytes never traverse these JSON endpoints. Phase 1 does not add a media
+server, processor pipeline, OCR, ASR, or transcoding.
 
 ## Quality gates
 
@@ -38,4 +68,5 @@ ports; PostgreSQL, Redis, MinIO, media servers, and processors remain later-phas
 .venv/bin/mypy src
 .venv/bin/pytest
 .venv/bin/pytest --cov=src --cov-report=term-missing
+.venv/bin/pytest tests/integration/production
 ```
