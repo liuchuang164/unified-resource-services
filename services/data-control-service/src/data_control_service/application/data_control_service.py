@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from time import perf_counter
 
 from data_control_service.adapters.registry import AdapterRegistry
@@ -10,7 +11,13 @@ from data_control_service.application.transaction_orchestrator import Transactio
 from data_control_service.contracts.request import DataRequest
 from data_control_service.contracts.response import DataResponse, PageInfo
 from data_control_service.domain.exceptions import DataControlError
-from data_control_service.domain.models import AdapterCommand
+from data_control_service.domain.models import (
+    AdapterCommand,
+    AdapterResult,
+    ExecutionContext,
+    RouteDecision,
+)
+from data_control_service.ports.audit_repository import AuditRepository
 from data_control_service.ports.auth_provider import AuthenticatedPrincipal, RequestContext
 
 
@@ -24,7 +31,8 @@ class DataControlService:
         routing_service: RoutingService,
         transaction_orchestrator: TransactionOrchestrator,
         adapter_registry: AdapterRegistry,
-        audit_service: InMemoryAuditService,
+        audit_service: AuditRepository | InMemoryAuditService,
+        readiness_checks: dict[str, Callable[[], Awaitable[dict[str, str]]]] | None = None,
     ) -> None:
         self._context_resolver = context_resolver
         self._authorization_service = authorization_service
@@ -33,6 +41,7 @@ class DataControlService:
         self._transaction_orchestrator = transaction_orchestrator
         self._adapter_registry = adapter_registry
         self._audit_service = audit_service
+        self._readiness_checks = readiness_checks or {}
 
     async def dispatch(
         self,
@@ -44,11 +53,13 @@ class DataControlService:
         context = self._context_resolver.resolve(request, principal, request_context)
         route = None
         try:
-            registration = self._routing_service.get_registration(request, context)
-            self._authorization_service.authorize(request, context, registration)
+            registration = await self._routing_service.get_registration(request, context)
+            await self._authorization_service.authorize(request, context, registration)
             idempotency_record_id, replay = await self._idempotency_service.claim(request, context)
             if replay is not None:
-                await self._audit_service.record(request, context, status="REPLAYED", code="OK")
+                await self._record_access(
+                    request, context, status="REPLAYED", code="OK", latency_ms=0
+                )
                 return replay
 
             route = self._routing_service.route(request, registration)
@@ -99,17 +110,57 @@ class DataControlService:
                 },
             )
             await self._idempotency_service.succeed(idempotency_record_id, request, response)
-            await self._audit_service.record(
-                request, context, status="SUCCEEDED", code="OK", route=route
+            await self._record_change(
+                request, context, result, status="SUCCEEDED", code="OK", route=route
+            )
+            await self._record_access(
+                request,
+                context,
+                status="SUCCEEDED",
+                code="OK",
+                latency_ms=duration_ms,
+                route=route,
             )
             return response
         except DataControlError as exc:
             record_id = locals().get("idempotency_record_id")
             await self._idempotency_service.fail(record_id, request, exc.code)
-            await self._audit_service.record(
-                request, context, status="FAILED", code=exc.code, route=route
+            await self._record_access(
+                request, context, status="FAILED", code=exc.code, latency_ms=0, route=route
             )
             raise
+
+    async def _record_access(
+        self,
+        request: DataRequest,
+        context: ExecutionContext,
+        *,
+        status: str,
+        code: str,
+        latency_ms: int,
+        route: RouteDecision | None = None,
+    ) -> None:
+        if hasattr(self._audit_service, "record_access"):
+            await self._audit_service.record_access(
+                request, context, status=status, code=code, latency_ms=latency_ms, route=route
+            )
+            return
+        await self._audit_service.record(request, context, status=status, code=code, route=route)
+
+    async def _record_change(
+        self,
+        request: DataRequest,
+        context: ExecutionContext,
+        result: AdapterResult,
+        *,
+        status: str,
+        code: str,
+        route: RouteDecision,
+    ) -> None:
+        if hasattr(self._audit_service, "record_change"):
+            await self._audit_service.record_change(
+                request, context, result, status=status, code=code, route=route
+            )
 
     async def readiness(self) -> dict[str, object]:
         registry_validation = await self._adapter_registry.validate()
@@ -127,6 +178,13 @@ class DataControlService:
         }
         degraded = False
         ready = registry_validation.status == "ok"
+        for name, check in self._readiness_checks.items():
+            try:
+                result = await check()
+                components[name] = {"status": result.get("status", "ok")}
+            except Exception:
+                ready = False
+                components[name] = {"status": "error"}
         for target, health in adapter_health.items():
             ok = health.status == "UP"
             if health.required and not ok:

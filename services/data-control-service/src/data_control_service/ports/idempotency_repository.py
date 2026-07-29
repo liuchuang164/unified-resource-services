@@ -33,6 +33,7 @@ class IdempotencyScope:
 class IdempotencyClaimResult:
     state: IdempotencyClaimState
     record_id: str
+    owner_token: str | None = None
     response_snapshot: dict[str, object] | None = None
     error_code: str | None = None
 
@@ -48,9 +49,10 @@ class IdempotencyRepository(Protocol):
     async def mark_succeeded(
         self,
         record_id: str,
+        owner_token: str,
         response_snapshot: dict[str, object],
     ) -> None: ...
 
-    async def mark_failed(self, record_id: str, error_code: str) -> None: ...
+    async def mark_failed(self, record_id: str, owner_token: str, error_code: str) -> None: ...
 
     async def health(self) -> dict[str, str]: ...

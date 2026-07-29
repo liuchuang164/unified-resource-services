@@ -33,7 +33,7 @@ class IdempotencyService:
 
     async def claim(
         self, request: DataRequest, context: ExecutionContext
-    ) -> tuple[str | None, DataResponse | None]:
+    ) -> tuple[tuple[str, str] | None, DataResponse | None]:
         if not request.is_write:
             return None, None
         if not request.idempotency_key:
@@ -50,7 +50,7 @@ class IdempotencyService:
             datetime.now(UTC) + timedelta(seconds=self._settings.idempotency_ttl_seconds),
         )
         if result.state == IdempotencyClaimState.CLAIMED:
-            return result.record_id, None
+            return (result.record_id, result.owner_token or ""), None
         if result.state == IdempotencyClaimState.REPLAY_SUCCEEDED and result.response_snapshot:
             replay = DataResponse.model_validate(result.response_snapshot)
             replay.meta["idempotency_replayed"] = True
@@ -60,17 +60,23 @@ class IdempotencyService:
         if result.state == IdempotencyClaimState.IN_PROGRESS:
             raise DataControlError("IDEMPOTENCY_IN_PROGRESS")
         if result.state == IdempotencyClaimState.RETRY_FAILED:
-            return result.record_id, None
+            return (result.record_id, result.owner_token or ""), None
         raise DataControlError("INTERNAL_ERROR")
 
     async def succeed(
-        self, record_id: str | None, request: DataRequest, response: DataResponse
+        self, record_ref: tuple[str, str] | None, request: DataRequest, response: DataResponse
     ) -> None:
-        if record_id is None or not request.is_write:
+        if record_ref is None or not request.is_write:
             return
-        await self._repository.mark_succeeded(record_id, response.model_dump(mode="json"))
+        record_id, owner_token = record_ref
+        await self._repository.mark_succeeded(
+            record_id, owner_token, response.model_dump(mode="json")
+        )
 
-    async def fail(self, record_id: str | None, request: DataRequest, error_code: str) -> None:
-        if record_id is None or not request.is_write:
+    async def fail(
+        self, record_ref: tuple[str, str] | None, request: DataRequest, error_code: str
+    ) -> None:
+        if record_ref is None or not request.is_write:
             return
-        await self._repository.mark_failed(record_id, error_code)
+        record_id, owner_token = record_ref
+        await self._repository.mark_failed(record_id, owner_token, error_code)

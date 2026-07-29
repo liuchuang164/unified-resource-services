@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 
 from fastapi import Request
@@ -17,10 +18,24 @@ from data_control_service.infrastructure.auth.development_auth_provider import (
     DevelopmentAuthProvider,
 )
 from data_control_service.infrastructure.idempotency.in_memory import InMemoryIdempotencyRepository
+from data_control_service.infrastructure.persistence.database import (
+    DatabaseManager,
+    require_database_url,
+)
+from data_control_service.infrastructure.persistence.repositories import (
+    SQLAlchemyAuditRepository,
+    SQLAlchemyIdempotencyRepository,
+    SQLAlchemyPolicyRepository,
+    SQLAlchemyResourceMappingRepository,
+)
 from data_control_service.infrastructure.resources.in_memory import (
     InMemoryResourceMappingRepository,
 )
+from data_control_service.ports.audit_repository import AuditRepository
 from data_control_service.ports.auth_provider import AuthProvider
+from data_control_service.ports.idempotency_repository import IdempotencyRepository
+from data_control_service.ports.policy_repository import PolicyRepository
+from data_control_service.ports.resource_mapping_repository import ResourceMappingRepository
 
 
 @lru_cache
@@ -29,17 +44,74 @@ def get_settings() -> Settings:
 
 
 @lru_cache
+def get_control_database_manager() -> DatabaseManager | None:
+    settings = get_settings()
+    if not settings.control_database_url:
+        if settings.app_env in {"production", "test"}:
+            require_database_url(settings.control_database_url, "control", settings)
+        return None
+    return DatabaseManager(settings.control_database_url, settings, name="control")
+
+
+@lru_cache
+def get_target_postgresql_manager() -> DatabaseManager | None:
+    settings = get_settings()
+    if not settings.postgresql_adapter_database_url:
+        if settings.postgresql_adapter_enabled or settings.app_env in {"production", "test"}:
+            require_database_url(settings.postgresql_adapter_database_url, "target", settings)
+        return None
+    return DatabaseManager(
+        settings.postgresql_adapter_database_url, settings, name="postgresql_adapter"
+    )
+
+
+@lru_cache
 def get_data_control_service() -> DataControlService:
     settings = get_settings()
-    resource_repository = InMemoryResourceMappingRepository(create_default_resource_registry())
+    control_database = get_control_database_manager()
+    target_database = get_target_postgresql_manager()
+    if control_database is not None:
+        resource_repository: ResourceMappingRepository = SQLAlchemyResourceMappingRepository(
+            control_database.session_factory
+        )
+        policy_repository: PolicyRepository | None = SQLAlchemyPolicyRepository(
+            control_database.session_factory
+        )
+        idempotency_repository: IdempotencyRepository = SQLAlchemyIdempotencyRepository(
+            control_database.session_factory,
+            processing_timeout_seconds=settings.idempotency_processing_timeout_seconds,
+        )
+        audit_repository: AuditRepository | InMemoryAuditService = SQLAlchemyAuditRepository(
+            control_database.session_factory
+        )
+    else:
+        resource_repository = InMemoryResourceMappingRepository(create_default_resource_registry())
+        policy_repository = None
+        idempotency_repository = InMemoryIdempotencyRepository()
+        audit_repository = InMemoryAuditService()
+    readiness_checks: dict[str, Callable[[], Awaitable[dict[str, str]]]] = {}
+    if control_database is not None:
+        readiness_checks["control_database"] = control_database.ping
+        readiness_checks["idempotency_repository"] = idempotency_repository.health
+        readiness_checks["resource_mapping_repository"] = resource_repository.health
+        if policy_repository is not None:
+            readiness_checks["policy_provider"] = policy_repository.health
+        if isinstance(audit_repository, SQLAlchemyAuditRepository):
+            readiness_checks["audit_repository"] = audit_repository.health
+    if target_database is not None:
+        readiness_checks["postgresql_adapter_database"] = target_database.ping
     return DataControlService(
         context_resolver=ContextResolver(),
-        authorization_service=AuthorizationService(),
-        idempotency_service=IdempotencyService(InMemoryIdempotencyRepository(), settings),
+        authorization_service=AuthorizationService(policy_repository),
+        idempotency_service=IdempotencyService(idempotency_repository, settings),
         routing_service=RoutingService(settings, resource_repository),
         transaction_orchestrator=TransactionOrchestrator(),
-        adapter_registry=create_default_registry(settings),
-        audit_service=InMemoryAuditService(),
+        adapter_registry=create_default_registry(
+            settings,
+            target_database.session_factory if target_database is not None else None,
+        ),
+        audit_service=audit_repository,
+        readiness_checks=readiness_checks,
     )
 
 

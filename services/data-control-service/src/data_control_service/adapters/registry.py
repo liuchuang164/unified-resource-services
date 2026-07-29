@@ -1,10 +1,15 @@
 from dataclasses import dataclass
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from data_control_service.adapters.base import AdapterHealth, DataAdapter
 from data_control_service.adapters.milvus import InMemoryMilvusAdapter
 from data_control_service.adapters.minio import InMemoryMinIOAdapter
 from data_control_service.adapters.neo4j import InMemoryNeo4jAdapter
-from data_control_service.adapters.postgresql import InMemoryPostgreSQLAdapter
+from data_control_service.adapters.postgresql import (
+    InMemoryPostgreSQLAdapter,
+    SQLAlchemyPostgreSQLAdapter,
+)
 from data_control_service.adapters.redis import InMemoryRedisAdapter
 from data_control_service.adapters.timescaledb import InMemoryTimescaleDBAdapter
 from data_control_service.config.settings import Settings
@@ -57,11 +62,23 @@ class AdapterRegistry:
         return {adapter.target: await adapter.health() for adapter in self._by_target.values()}
 
 
-def create_default_registry(settings: Settings | None = None) -> AdapterRegistry:
+def create_default_registry(
+    settings: Settings | None = None,
+    postgresql_session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> AdapterRegistry:
     settings = settings or Settings()
+    postgresql_adapter = (
+        SQLAlchemyPostgreSQLAdapter(
+            postgresql_session_factory,
+            required=settings.postgresql_adapter_required,
+            max_batch_size=settings.max_batch_size,
+        )
+        if settings.postgresql_adapter_enabled and postgresql_session_factory is not None
+        else InMemoryPostgreSQLAdapter()
+    )
     return AdapterRegistry(
         [
-            InMemoryPostgreSQLAdapter(),
+            postgresql_adapter,
             InMemoryMinIOAdapter(
                 settings.max_object_size_bytes, settings.max_presigned_url_ttl_seconds
             ),

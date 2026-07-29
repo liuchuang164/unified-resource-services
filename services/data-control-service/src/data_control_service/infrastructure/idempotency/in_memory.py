@@ -15,6 +15,7 @@ from data_control_service.ports.idempotency_repository import (
 @dataclass
 class _Record:
     record_id: str
+    owner_token: str
     scope: IdempotencyScope
     request_fingerprint: str
     status: IdempotencyStatus
@@ -45,8 +46,10 @@ class InMemoryIdempotencyRepository(IdempotencyRepository):
                 record.status == IdempotencyStatus.PROCESSING and record.expires_at <= now
             ):
                 record_id = f"idem_{uuid4().hex}"
+                owner_token = uuid4().hex
                 self._records[key] = _Record(
                     record_id=record_id,
+                    owner_token=owner_token,
                     scope=scope,
                     request_fingerprint=request_fingerprint,
                     status=IdempotencyStatus.PROCESSING,
@@ -56,7 +59,7 @@ class InMemoryIdempotencyRepository(IdempotencyRepository):
                     updated_at=now,
                     expires_at=expires_at,
                 )
-                return IdempotencyClaimResult(IdempotencyClaimState.CLAIMED, record_id)
+                return IdempotencyClaimResult(IdempotencyClaimState.CLAIMED, record_id, owner_token)
             if record.request_fingerprint != request_fingerprint:
                 return IdempotencyClaimResult(
                     IdempotencyClaimState.FINGERPRINT_CONFLICT, record.record_id
@@ -67,30 +70,37 @@ class InMemoryIdempotencyRepository(IdempotencyRepository):
                 return IdempotencyClaimResult(
                     IdempotencyClaimState.REPLAY_SUCCEEDED,
                     record.record_id,
+                    None,
                     response_snapshot=record.response_snapshot,
                 )
+            previous_error = record.error_code
+            record.owner_token = uuid4().hex
+            record.status = IdempotencyStatus.PROCESSING
+            record.error_code = None
             return IdempotencyClaimResult(
                 IdempotencyClaimState.RETRY_FAILED,
                 record.record_id,
-                error_code=record.error_code,
+                record.owner_token,
+                error_code=previous_error,
             )
 
     async def mark_succeeded(
         self,
         record_id: str,
+        owner_token: str,
         response_snapshot: dict[str, object],
     ) -> None:
         record = self._record_by_id(record_id)
-        if record is None:
+        if record is None or record.owner_token != owner_token:
             return
         async with self._lock_for(self._key(record.scope)):
             record.status = IdempotencyStatus.SUCCEEDED
             record.response_snapshot = response_snapshot
             record.updated_at = datetime.now(UTC)
 
-    async def mark_failed(self, record_id: str, error_code: str) -> None:
+    async def mark_failed(self, record_id: str, owner_token: str, error_code: str) -> None:
         record = self._record_by_id(record_id)
-        if record is None:
+        if record is None or record.owner_token != owner_token:
             return
         async with self._lock_for(self._key(record.scope)):
             record.status = IdempotencyStatus.FAILED

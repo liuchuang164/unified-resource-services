@@ -1,3 +1,4 @@
+from typing import cast
 from uuid import uuid4
 
 from data_control_service.config.settings import Settings
@@ -14,14 +15,29 @@ class RoutingService:
         self._settings = settings
         self._resource_repository = resource_repository
 
-    def get_registration(self, request: DataRequest, context: ExecutionContext) -> ResourceMapping:
-        registration = self._resource_repository.get_mapping(
-            tenant_id=context.tenant_id,
-            biz_domain=context.biz_domain,
-            target=request.resource.target,
-            resource_type=request.resource.type,
-            logical_name=request.resource.name,
-        )
+    async def get_registration(
+        self, request: DataRequest, context: ExecutionContext
+    ) -> ResourceMapping:
+        async_getter = getattr(self._resource_repository, "get_mapping_async", None)
+        if async_getter is not None:
+            registration = cast(
+                ResourceMapping | None,
+                await async_getter(
+                    tenant_id=context.tenant_id,
+                    biz_domain=context.biz_domain,
+                    target=request.resource.target,
+                    resource_type=request.resource.type,
+                    logical_name=request.resource.name,
+                ),
+            )
+        else:
+            registration = self._resource_repository.get_mapping(
+                tenant_id=context.tenant_id,
+                biz_domain=context.biz_domain,
+                target=request.resource.target,
+                resource_type=request.resource.type,
+                logical_name=request.resource.name,
+            )
         if registration is None:
             raise DataControlError("RESOURCE_TYPE_UNKNOWN")
         return registration

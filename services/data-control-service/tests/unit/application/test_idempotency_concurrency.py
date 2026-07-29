@@ -30,8 +30,8 @@ async def test_same_scope_claim_is_atomic() -> None:
     request = DataRequest.model_validate(base_request())
 
     async def claim_once() -> str | None:
-        record_id, replay = await service.claim(request, context())
-        return record_id if replay is None else "replay"
+        record_ref, replay = await service.claim(request, context())
+        return record_ref[0] if record_ref is not None and replay is None else "replay"
 
     results = await asyncio.gather(*(claim_once() for _ in range(20)), return_exceptions=True)
     claimed = [item for item in results if isinstance(item, str) and item.startswith("idem_")]
@@ -43,10 +43,11 @@ async def test_same_scope_claim_is_atomic() -> None:
 async def test_succeeded_request_replays() -> None:
     service = IdempotencyService(InMemoryIdempotencyRepository(), Settings())
     request = DataRequest.model_validate(base_request())
-    record_id, replay = await service.claim(request, context())
+    record_ref, replay = await service.claim(request, context())
     assert replay is None
+    assert record_ref is not None
     await service.succeed(
-        record_id,
+        record_ref,
         request,
         DataResponse(
             request_id="req_01J_TEST",
@@ -83,8 +84,11 @@ async def test_same_key_different_biz_domain_does_not_conflict() -> None:
 async def test_failed_record_can_be_retried() -> None:
     service = IdempotencyService(InMemoryIdempotencyRepository(), Settings())
     request = DataRequest.model_validate(base_request())
-    record_id, _ = await service.claim(request, context())
-    await service.fail(record_id, request, "ADAPTER_TIMEOUT")
-    retry_record_id, replay = await service.claim(request, context())
-    assert retry_record_id == record_id
+    record_ref, _ = await service.claim(request, context())
+    assert record_ref is not None
+    await service.fail(record_ref, request, "ADAPTER_TIMEOUT")
+    retry_record_ref, replay = await service.claim(request, context())
+    assert retry_record_ref is not None
+    assert retry_record_ref[0] == record_ref[0]
+    assert retry_record_ref[1] != record_ref[1]
     assert replay is None

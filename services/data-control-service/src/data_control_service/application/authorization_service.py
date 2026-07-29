@@ -3,10 +3,14 @@ from data_control_service.contracts.request import DataRequest
 from data_control_service.domain.exceptions import DataControlError
 from data_control_service.domain.models import ExecutionContext
 from data_control_service.domain.policies import ResourceMapping
+from data_control_service.ports.policy_repository import PolicyRepository
 
 
 class AuthorizationService:
-    def authorize(
+    def __init__(self, policy_repository: PolicyRepository | None = None) -> None:
+        self._policy_repository = policy_repository
+
+    async def authorize(
         self,
         request: DataRequest,
         context: ExecutionContext,
@@ -34,3 +38,9 @@ class AuthorizationService:
 
         if not required.issubset(permissions):
             raise DataControlError("PERMISSION_DENIED")
+        if self._policy_repository is not None:
+            decision = await self._policy_repository.decide(
+                context, registration, request.operation, request.resource.target
+            )
+            if not decision.allowed:
+                raise DataControlError("POLICY_DENIED")
