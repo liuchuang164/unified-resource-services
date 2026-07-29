@@ -9,9 +9,14 @@ description = "Tenant-scoped file and media streaming control-plane service"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "alembic>=1.14,<2",
+  "asyncpg>=0.30,<1",
   "fastapi>=0.115,<1",
+  "minio>=7.2,<8",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
+  "redis>=5.2,<7",
+  "sqlalchemy[asyncio]>=2.0.36,<3",
   "structlog>=24.4,<26",
   "uvicorn[standard]>=0.34,<1",
 ]
@@ -33,6 +38,9 @@ packages = ["src/file_media_stream_service"]
 addopts = "--strict-markers --strict-config"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+  "production_integration: requires the local PostgreSQL, Redis, and MinIO compose stack",
+]
 
 [tool.ruff]
 line-length = 100
@@ -51,6 +59,6 @@ branch = true
 source = ["file_media_stream_service"]
 
 [tool.coverage.report]
-fail_under = 85
+fail_under = 90
 show_missing = true
 omit = ["*/main.py"]
