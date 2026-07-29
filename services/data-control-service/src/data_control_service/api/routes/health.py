@@ -17,5 +17,4 @@ async def live() -> dict[str, str]:
 async def ready(
     service: Annotated[DataControlService, Depends(get_data_control_service)],
 ) -> dict[str, object]:
-    adapters = await service._adapter_registry.all()[0].health()
-    return {"status": "UP", "sample_adapter": adapters.details}
+    return await service.readiness()
