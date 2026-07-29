@@ -80,14 +80,26 @@ jobs:
       - name: Mypy
         run: mypy src
       - name: Unit tests
-        run: pytest -q
+        run: |
+          unset CONTROL_DATABASE_URL CONTROL_DATABASE_MIGRATION_URL
+          unset POSTGRESQL_ADAPTER_DATABASE_URL TARGET_DATABASE_MIGRATION_URL
+          APP_ENV=development POSTGRESQL_ADAPTER_ENABLED=false pytest -q
       - name: PostgreSQL integration tests
         run: pytest -m postgresql -q
       - name: PostgreSQL reliability tests
         run: pytest -m reliability -q
       - name: Coverage
         run: |
-          coverage run -m pytest -q
+          unset CONTROL_DATABASE_URL CONTROL_DATABASE_MIGRATION_URL
+          unset POSTGRESQL_ADAPTER_DATABASE_URL TARGET_DATABASE_MIGRATION_URL
+          APP_ENV=development POSTGRESQL_ADAPTER_ENABLED=false coverage run -m pytest -q
+          export APP_ENV=test
+          export CONTROL_DATABASE_URL='postgresql+asyncpg://data_control:change_me@localhost:5432/dcs_control_test'
+          export CONTROL_DATABASE_MIGRATION_URL='postgresql+psycopg://data_control:change_me@localhost:5432/dcs_control_test'
+          export POSTGRESQL_ADAPTER_ENABLED=true
+          export POSTGRESQL_ADAPTER_REQUIRED=true
+          export POSTGRESQL_ADAPTER_DATABASE_URL='postgresql+asyncpg://data_control:change_me@localhost:5432/dcs_target_test'
+          export TARGET_DATABASE_MIGRATION_URL='postgresql+psycopg://data_control:change_me@localhost:5432/dcs_target_test'
           coverage run --append -m pytest -m postgresql -q
           coverage run --append -m pytest -m reliability -q
           coverage report --fail-under=85
