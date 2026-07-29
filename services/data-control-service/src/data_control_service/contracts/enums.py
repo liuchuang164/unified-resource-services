@@ -47,6 +47,7 @@ class DataClass(StrEnum):
 
 
 class TransactionMode(StrEnum):
+    NONE = "NONE"
     LOCAL = "LOCAL"
     BEST_EFFORT = "BEST_EFFORT"
     ATOMIC = "ATOMIC"
