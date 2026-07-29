@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: data-control-postgresql
+    environment:
+      POSTGRES_USER: data_control
+      POSTGRES_PASSWORD: change_me
+      POSTGRES_DB: data_control
+    ports:
+      - "5432:5432"
+    volumes:
+      - data-control-postgresql:/var/lib/postgresql/data
+      - ./scripts/init-postgresql.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U data_control -d data_control"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    profiles: ["dev", "test"]
+
+volumes:
+  data-control-postgresql:
+

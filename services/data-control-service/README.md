@@ -1,6 +1,6 @@
 # 数据库分发管控服务
 
-Phase 1.2 Python/FastAPI baseline for `POST /data/dispatch`.
+Phase 2 Python/FastAPI baseline for `POST /data/dispatch`, with PostgreSQL control-plane persistence and a real SQLAlchemy PostgreSQL adapter path.
 
 ## Run
 
@@ -11,14 +11,27 @@ pip install -e ".[dev]"
 uvicorn data_control_service.main:app --reload
 ```
 
+## PostgreSQL Development
+
+```bash
+docker compose -f docker-compose.postgresql.yml --profile dev up -d
+CONTROL_DATABASE_MIGRATION_URL=postgresql+psycopg://data_control:change_me@localhost:5432/data_control alembic upgrade head
+CONTROL_DATABASE_URL=postgresql+asyncpg://data_control:change_me@localhost:5432/data_control python scripts/bootstrap_postgresql.py
+```
+
+Use `CONTROL_DATABASE_URL` for service control-plane tables and `POSTGRESQL_ADAPTER_DATABASE_URL` for target PostgreSQL data. Development may point both to the same PostgreSQL instance, but control-plane tables live in `control_plane` and example target data lives in `data_target`.
+
 ## Test
 
 ```bash
 ruff check .
 mypy src
 pytest -q
+pytest -m postgresql -q
 pytest --cov=src --cov-report=term-missing
 ```
+
+`pytest -m postgresql` requires explicit PostgreSQL URLs. Without them, PostgreSQL tests skip and must not be counted as real Phase 2 validation.
 
 ## Phase 1.2 Scope
 
@@ -41,14 +54,14 @@ pytest --cov=src --cov-report=term-missing
 
 - Application code depends on the `IdempotencyRepository` port.
 - `InMemoryIdempotencyRepository` uses per-scope `asyncio.Lock` to make claim atomic.
-- `SQLAlchemyIdempotencyRepository` and Alembic migration define the durable table and unique scope for `tenant_id`, `biz_domain`, `operation`, `target` and `idempotency_key`.
-- The default local dependency still uses the in-memory implementation.
+- `SQLAlchemyIdempotencyRepository` uses PostgreSQL unique scope, row locking, owner tokens and timeout recovery.
+- Runtime dependency switches to PostgreSQL when `CONTROL_DATABASE_URL` is configured. The in-memory implementation is retained for local unit tests and bootstrap-free development only.
 
 ## Adapter Implementations
 
-All six adapters are first-phase in-memory implementations with storage-specific contracts:
+PostgreSQL has a real SQLAlchemy Async adapter path. The other five adapters remain Phase 1.2 in-memory implementations with storage-specific contracts:
 
-- PostgreSQL: relation-like rows, tenant/domain columns, controlled CRUD and batch.
+- PostgreSQL: SQLAlchemy Core, parameterized statements, trusted Resource Mapping, tenant/domain filters, soft delete and optimistic versioning.
 - MinIO: server-side bucket mapping and generated tenant/domain object keys.
 - Redis: server-generated key namespace, TTL limit and token-based locks.
 - Neo4j: node/relation stores with label and relation allowlists.
@@ -57,11 +70,13 @@ All six adapters are first-phase in-memory implementations with storage-specific
 
 ## Resource Registry
 
-`ResourceRegistry` maps platform logical resources to targets and adapter-specific physical mappings. The built-in defaults are neutral demo mappings such as `DOCUMENT_RECORD`, `OBJECT_ASSET`, `CACHE_ENTRY`, `GRAPH_ENTITY`, `VECTOR_ITEM` and `TIME_SERIES_POINT`; tenant-specific mappings should move to configuration such as `config/resources.example.yaml`.
+`ResourceRegistry` maps platform logical resources to targets and adapter-specific physical mappings. Phase 2 adds `resource_mappings` and `policy_bindings` tables. The in-memory defaults remain for local unit tests; PostgreSQL runtime should bootstrap mappings and policies using `scripts/bootstrap_postgresql.py` or a controlled admin process.
 
 ## Readiness
 
 `GET /health/live` only confirms the process can respond. `GET /health/ready` checks configured service components, registry validation and every registered adapter's public health result. Required adapter failure makes the service not ready; optional adapter failure marks it degraded.
+
+When PostgreSQL URLs are configured, readiness also pings the control database, PostgreSQL adapter database and persistent repositories without returning host, port, database name, username or URL.
 
 ## Non-goals
 
@@ -69,4 +84,5 @@ All six adapters are first-phase in-memory implementations with storage-specific
 - No business-domain logic.
 - No cross-adapter distributed transaction guarantee.
 - No production identity provider implementation in this phase; `development` auth is blocked when `APP_ENV=production`.
-- No real PostgreSQL, MinIO, Redis, Neo4j, Milvus or TimescaleDB driver integration yet.
+- No real MinIO, Redis, Neo4j, Milvus or TimescaleDB driver integration yet.
+- No cross-database atomicity between control-plane audit/idempotency and target data writes.

@@ -1,0 +1,69 @@
+name: data-control-service
+
+on:
+  push:
+    branches:
+      - feature/database-distribution-control-service
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/data-control-service
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: data_control
+          POSTGRES_PASSWORD: change_me
+          POSTGRES_DB: data_control
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U data_control -d data_control"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      APP_ENV: test
+      AUTH_PROVIDER: development
+      CONTROL_DATABASE_URL: postgresql+asyncpg://data_control:change_me@localhost:5432/data_control
+      CONTROL_DATABASE_MIGRATION_URL: postgresql+psycopg://data_control:change_me@localhost:5432/data_control
+      POSTGRESQL_ADAPTER_ENABLED: "true"
+      POSTGRESQL_ADAPTER_REQUIRED: "true"
+      POSTGRESQL_ADAPTER_DATABASE_URL: postgresql+asyncpg://data_control:change_me@localhost:5432/data_control
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Prepare target database schema
+        run: |
+          alembic upgrade head
+          python scripts/bootstrap_postgresql.py
+      - name: Lint
+        run: ruff check .
+      - name: Format check
+        run: ruff format --check .
+      - name: Mypy
+        run: mypy src
+      - name: Unit tests
+        run: pytest -q
+      - name: PostgreSQL integration tests
+        run: pytest -m postgresql -q
+      - name: Migration downgrade and upgrade
+        run: |
+          alembic current
+          alembic downgrade -1
+          alembic upgrade head
+      - name: Coverage
+        run: pytest --cov=src --cov-report=term-missing
+      - name: Secret scan
+        run: |
+          ! grep -RInE "BEGIN (RSA|OPENSSH|PRIVATE)|AKIA[0-9A-Z]{16}|password *=|secret *=" src tests config README.md
