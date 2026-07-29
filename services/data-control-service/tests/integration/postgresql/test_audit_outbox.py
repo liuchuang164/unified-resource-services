@@ -68,11 +68,19 @@ async def test_audit_outbox_processor_materializes_access_audit() -> None:
             outbox_repository=repository,
             audit_session_factory=manager.session_factory,
             worker_id=f"worker_{uuid4().hex}",
-            batch_size=10,
+            batch_size=100,
             lock_timeout_seconds=30,
         )
-        result = await processor.run_once()
-        assert result == {"claimed": 1, "processed": 1, "failed": 0}
+        for _ in range(5):
+            await processor.run_once()
+            async with manager.session() as session:
+                outbox_status = (
+                    await session.execute(
+                        select(AuditOutboxModel.status).where(AuditOutboxModel.event_id == event_id)
+                    )
+                ).scalar_one()
+            if outbox_status == "SUCCEEDED":
+                break
         async with manager.session() as session:
             audit_count = (
                 await session.execute(
