@@ -142,8 +142,15 @@ jobs:
         run: docker compose -f docker-compose.reliability.yml up -d
       - name: Wait for PostgreSQL pair
         run: |
-          docker compose -f docker-compose.reliability.yml exec -T postgres-control pg_isready -U data_control -d dcs_control_reliability
-          docker compose -f docker-compose.reliability.yml exec -T postgres-target pg_isready -U data_control -d dcs_target_reliability
+          for i in {1..30}; do
+            if docker compose -f docker-compose.reliability.yml exec -T postgres-control pg_isready -U data_control -d dcs_control_reliability \
+              && docker compose -f docker-compose.reliability.yml exec -T postgres-target pg_isready -U data_control -d dcs_target_reliability; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.reliability.yml ps
+          exit 1
       - name: Migration control
         run: alembic -c alembic-control.ini upgrade head
       - name: Migration target

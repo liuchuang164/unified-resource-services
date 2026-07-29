@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -24,6 +25,17 @@ def _compose(command: list[str]) -> None:
     )
 
 
+def _wait_compose_ready(service: str) -> None:
+    for _ in range(30):
+        try:
+            _compose(["exec", "-T", service, "pg_isready", "-U", "data_control"])
+            return
+        except subprocess.CalledProcessError:
+            time.sleep(2)
+    _compose(["ps"])
+    raise AssertionError(f"{service} did not become ready")
+
+
 @pytest.mark.postgresql
 @pytest.mark.reliability
 async def test_dedicated_postgresql_stop_start_recovers_readiness() -> None:
@@ -38,7 +50,7 @@ async def test_dedicated_postgresql_stop_start_recovers_readiness() -> None:
             await manager.ping()
         assert exc.value.code == "ADAPTER_UNAVAILABLE"
         _compose(["start", "postgres-target"])
-        _compose(["exec", "-T", "postgres-target", "pg_isready", "-U", "data_control"])
+        _wait_compose_ready("postgres-target")
         assert (await manager.ping())["status"] == "ok"
     finally:
         await manager.close()

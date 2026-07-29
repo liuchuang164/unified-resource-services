@@ -74,6 +74,16 @@ def recovery_request() -> dict[str, Any]:
 async def test_mark_succeeded_failure_enters_recovery_without_duplicate_write(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    for name in (
+        "CONTROL_DATABASE_URL",
+        "CONTROL_DATABASE_MIGRATION_URL",
+        "POSTGRESQL_ADAPTER_DATABASE_URL",
+        "TARGET_DATABASE_MIGRATION_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("POSTGRESQL_ADAPTER_ENABLED", "false")
+    get_data_control_service.cache_clear()
     service = get_data_control_service()
     wrapped = FailOnceMarkSucceededRepository(service._idempotency_service._repository)
     monkeypatch.setattr(service._idempotency_service, "_repository", wrapped)
