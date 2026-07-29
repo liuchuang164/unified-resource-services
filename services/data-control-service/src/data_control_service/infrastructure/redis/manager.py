@@ -16,15 +16,18 @@ class RedisManager:
     def _create_client(self) -> None:
         if self._client is not None:
             return
+        connection_options = {
+            "username": self._settings.redis_username or None,
+            "password": self._settings.redis_password or None,
+            "max_connections": self._settings.redis_max_connections,
+            "socket_connect_timeout": self._settings.redis_socket_connect_timeout_seconds,
+            "socket_timeout": self._settings.redis_socket_timeout_seconds,
+            "health_check_interval": self._settings.redis_health_check_interval_seconds,
+            "decode_responses": True,
+        }
         self._pool = ConnectionPool.from_url(
             self._settings.redis_url or "",
-            username=self._settings.redis_username or None,
-            password=self._settings.redis_password or None,
-            max_connections=self._settings.redis_max_connections,
-            socket_connect_timeout=self._settings.redis_socket_connect_timeout_seconds,
-            socket_timeout=self._settings.redis_socket_timeout_seconds,
-            health_check_interval=self._settings.redis_health_check_interval_seconds,
-            decode_responses=True,
+            **connection_options,
         )
         self._client = Redis(connection_pool=self._pool)
 
