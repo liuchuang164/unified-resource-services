@@ -9,6 +9,8 @@ dependencies = [
   "pydantic-settings>=2.3.0",
   "uvicorn[standard]>=0.30.0",
   "structlog>=24.1.0",
+  "SQLAlchemy>=2.0.0",
+  "alembic>=1.13.0",
 ]
 
 [project.optional-dependencies]

@@ -1,101 +1,76 @@
 import hashlib
 import json
-from dataclasses import dataclass
-from enum import StrEnum
+from datetime import UTC, datetime, timedelta
 
+from data_control_service.config.settings import Settings
 from data_control_service.contracts.request import DataRequest
 from data_control_service.contracts.response import DataResponse
 from data_control_service.domain.exceptions import DataControlError
 from data_control_service.domain.models import ExecutionContext
+from data_control_service.ports.idempotency_repository import (
+    IdempotencyClaimState,
+    IdempotencyRepository,
+    IdempotencyScope,
+)
 
 
-class IdempotencyStatus(StrEnum):
-    PROCESSING = "PROCESSING"
-    SUCCEEDED = "SUCCEEDED"
-    FAILED_RETRYABLE = "FAILED_RETRYABLE"
-    FAILED_FINAL = "FAILED_FINAL"
+class IdempotencyService:
+    def __init__(self, repository: IdempotencyRepository, settings: Settings) -> None:
+        self._repository = repository
+        self._settings = settings
+        self.adapter_execution_count = 0
 
-
-@dataclass
-class IdempotencyRecord:
-    digest: str
-    status: IdempotencyStatus
-    response: DataResponse | None = None
-
-
-class InMemoryIdempotencyService:
-    def __init__(self) -> None:
-        self._records: dict[tuple[str, str, str, str, str], IdempotencyRecord] = {}
-
-    def request_digest(self, request: DataRequest) -> str:
-        canonical = request.model_dump(
-            mode="json",
-            exclude={"trace_id", "metadata"},
-            exclude_none=True,
-        )
+    def request_fingerprint(self, request: DataRequest) -> str:
+        canonical = {
+            "operation": request.operation.value,
+            "target": request.resource.target.value,
+            "resource": request.resource.model_dump(mode="json", exclude_none=True),
+            "payload": request.payload.model_dump(mode="json"),
+        }
         return hashlib.sha256(
             json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
-    async def claim(self, request: DataRequest, context: ExecutionContext) -> DataResponse | None:
+    async def claim(
+        self, request: DataRequest, context: ExecutionContext
+    ) -> tuple[str | None, DataResponse | None]:
         if not request.is_write:
-            return None
+            return None, None
         if not request.idempotency_key:
             raise DataControlError("IDEMPOTENCY_KEY_REQUIRED")
-        key = (
-            context.tenant_id,
-            context.biz_domain,
-            context.subject_id,
-            request.operation.value,
-            request.idempotency_key,
+        result = await self._repository.claim(
+            IdempotencyScope(
+                tenant_id=context.tenant_id,
+                biz_domain=context.biz_domain,
+                operation=request.operation,
+                target=request.resource.target,
+                idempotency_key=request.idempotency_key,
+            ),
+            self.request_fingerprint(request),
+            datetime.now(UTC) + timedelta(seconds=self._settings.idempotency_ttl_seconds),
         )
-        digest = self.request_digest(request)
-        record = self._records.get(key)
-        if record is None:
-            self._records[key] = IdempotencyRecord(
-                digest=digest, status=IdempotencyStatus.PROCESSING
-            )
-            return None
-        if record.digest != digest:
-            raise DataControlError("IDEMPOTENCY_KEY_CONFLICT")
-        if record.status == IdempotencyStatus.PROCESSING:
-            raise DataControlError("IDEMPOTENCY_IN_PROGRESS")
-        if record.status == IdempotencyStatus.SUCCEEDED and record.response is not None:
-            replay = record.response.model_copy(deep=True)
+        if result.state == IdempotencyClaimState.CLAIMED:
+            return result.record_id, None
+        if result.state == IdempotencyClaimState.REPLAY_SUCCEEDED and result.response_snapshot:
+            replay = DataResponse.model_validate(result.response_snapshot)
             replay.meta["idempotency_replayed"] = True
-            return replay
-        return None
+            return None, replay
+        if result.state == IdempotencyClaimState.FINGERPRINT_CONFLICT:
+            raise DataControlError("IDEMPOTENCY_KEY_CONFLICT")
+        if result.state == IdempotencyClaimState.IN_PROGRESS:
+            raise DataControlError("IDEMPOTENCY_IN_PROGRESS")
+        if result.state == IdempotencyClaimState.RETRY_FAILED:
+            return result.record_id, None
+        raise DataControlError("INTERNAL_ERROR")
 
     async def succeed(
-        self, request: DataRequest, context: ExecutionContext, response: DataResponse
+        self, record_id: str | None, request: DataRequest, response: DataResponse
     ) -> None:
-        if not request.is_write or not request.idempotency_key:
+        if record_id is None or not request.is_write:
             return
-        key = (
-            context.tenant_id,
-            context.biz_domain,
-            context.subject_id,
-            request.operation.value,
-            request.idempotency_key,
-        )
-        self._records[key] = IdempotencyRecord(
-            digest=self.request_digest(request),
-            status=IdempotencyStatus.SUCCEEDED,
-            response=response.model_copy(deep=True),
-        )
+        await self._repository.mark_succeeded(record_id, response.model_dump(mode="json"))
 
-    async def fail(self, request: DataRequest, context: ExecutionContext, retryable: bool) -> None:
-        if not request.is_write or not request.idempotency_key:
+    async def fail(self, record_id: str | None, request: DataRequest, error_code: str) -> None:
+        if record_id is None or not request.is_write:
             return
-        key = (
-            context.tenant_id,
-            context.biz_domain,
-            context.subject_id,
-            request.operation.value,
-            request.idempotency_key,
-        )
-        record = self._records.get(key)
-        if record is not None:
-            record.status = (
-                IdempotencyStatus.FAILED_RETRYABLE if retryable else IdempotencyStatus.FAILED_FINAL
-            )
+        await self._repository.mark_failed(record_id, error_code)
