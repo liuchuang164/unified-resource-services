@@ -9,6 +9,20 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
     auth_provider: str = "development"
+    control_database_url: str | None = None
+    control_database_migration_url: str | None = None
+    postgresql_adapter_enabled: bool = False
+    postgresql_adapter_required: bool = True
+    postgresql_adapter_database_url: str | None = None
+    database_pool_size: int = Field(default=10, ge=1)
+    database_max_overflow: int = Field(default=20, ge=0)
+    database_pool_timeout_seconds: int = Field(default=30, ge=1)
+    database_statement_timeout_ms: int = Field(default=5000, ge=100)
+    database_connect_timeout_seconds: int = Field(default=10, ge=1)
+    idempotency_processing_timeout_seconds: int = Field(default=120, ge=1)
+    audit_enabled: bool = True
+    audit_fail_closed_for_writes: bool = True
+    audit_payload_max_bytes: int = Field(default=4096, ge=128)
     contract_version: str = "1.0"
     default_timeout_ms: int = Field(default=5000, ge=100, le=60_000)
     max_timeout_ms: int = Field(default=10_000, ge=100, le=60_000)

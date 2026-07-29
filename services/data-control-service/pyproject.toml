@@ -11,6 +11,8 @@ dependencies = [
   "structlog>=24.1.0",
   "SQLAlchemy>=2.0.0",
   "alembic>=1.13.0",
+  "asyncpg>=0.29.0",
+  "psycopg[binary]>=3.2.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +35,11 @@ packages = ["src/data_control_service"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+  "postgresql: requires a real PostgreSQL 16 database",
+  "migration: exercises Alembic migrations",
+  "performance: records development-only baseline timings",
+]
 
 [tool.ruff]
 line-length = 100

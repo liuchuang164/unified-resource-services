@@ -48,6 +48,9 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
     ),
     "PERMISSION_DENIED": ErrorSpec(403, False, ErrorCategory.AUTHORIZATION, "permission denied"),
     "POLICY_DENIED": ErrorSpec(403, False, ErrorCategory.AUTHORIZATION, "policy denied"),
+    "FIELD_ACCESS_DENIED": ErrorSpec(
+        403, False, ErrorCategory.AUTHORIZATION, "field access denied"
+    ),
     "IDEMPOTENCY_KEY_REQUIRED": ErrorSpec(
         400, False, ErrorCategory.IDEMPOTENCY, "idempotency key is required"
     ),
@@ -71,8 +74,14 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
         422, False, ErrorCategory.DATA, "data constraint violation"
     ),
     "LOCK_CONFLICT": ErrorSpec(409, True, ErrorCategory.DATA, "resource lock conflict"),
+    "RESOURCE_VERSION_CONFLICT": ErrorSpec(
+        409, True, ErrorCategory.DATA, "resource version conflict"
+    ),
     "TRANSACTION_NOT_SUPPORTED": ErrorSpec(
         422, False, ErrorCategory.TRANSACTION, "transaction is not supported"
+    ),
+    "TRANSACTION_ROLLED_BACK": ErrorSpec(
+        409, True, ErrorCategory.TRANSACTION, "transaction rolled back"
     ),
     "PARTIAL_FAILURE": ErrorSpec(502, True, ErrorCategory.TRANSACTION, "batch partially failed"),
     "AUDIT_WRITE_FAILED": ErrorSpec(503, True, ErrorCategory.AUDIT, "audit write failed"),

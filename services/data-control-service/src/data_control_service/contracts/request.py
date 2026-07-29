@@ -58,6 +58,14 @@ class Payload(BaseModel):
             "bucket",
             "object_key",
             "path",
+            "schema",
+            "table",
+            "where_sql",
+            "order_by_sql",
+            "join_sql",
+            "database_url",
+            "stored_procedure",
+            "function",
         }
         for section_name, section in (
             ("data", self.data),
