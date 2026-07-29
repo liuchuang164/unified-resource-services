@@ -19,6 +19,8 @@
 - 新增 PostgreSQL 审计、Resource Mapping、Policy Binding Repository。
 - 新增 `SQLAlchemyPostgreSQLAdapter`，保留 `InMemoryPostgreSQLAdapter` 给单元测试。
 - 新增 Docker Compose、bootstrap 脚本、GitHub Actions workflow 和 PostgreSQL marker 测试基架。
+- 补充 SQLAlchemy async PostgreSQL 运行依赖 `greenlet`。
+- 测试环境下 `DatabaseManager` 使用 `NullPool`，避免 pytest 多事件循环复用 asyncpg 连接。
 
 ## 4. 最终目录结构
 
@@ -104,7 +106,21 @@ services/data-control-service/
 - `0004_create_policy_bindings`
 - `0005_create_platform_records`
 
-本机未执行 Alembic upgrade/downgrade，因为当前环境没有 `docker` 命令和真实 PostgreSQL 服务。
+已通过用户提供的 gateway server 上 PostgreSQL 16 实例执行 migration 验证。本地 Python 3.12 通过 SSH tunnel 连接远端 PostgreSQL，control database 和 target database 均完成：
+
+```text
+alembic current
+alembic downgrade -1
+alembic upgrade head
+alembic current
+```
+
+最终结果：
+
+```text
+0005 (head)
+0005 (head)
+```
 
 ## 9. 幂等 claim 算法
 
@@ -187,52 +203,55 @@ Adapter 层对 GET/LIST/UPDATE/DELETE/UPSERT 强制 scope 条件；CREATE 注入
 本机执行：
 
 ```text
-60 passed, 4 skipped in 0.11s
+60 passed, 4 skipped in 0.15s
 ```
 
 ## 23. PostgreSQL 集成测试
 
-本机执行：
+通过 gateway server 上 PostgreSQL 16 实例执行：
 
 ```text
 pytest -m postgresql -q
-ssss [100%]
-4 skipped, 54 deselected in 0.02s
+.... [100%]
+4 passed, 60 deselected in 3.61s
 ```
-
-原因：当前环境没有 `docker` 命令，也没有显式 PostgreSQL URL。
 
 ## 24. 并发测试
 
-新增 `tests/concurrency/postgresql/test_postgresql_idempotency_concurrency.py`，用于真实 PostgreSQL 两个独立 Repository 实例并发 claim。由于无 PostgreSQL 环境，本机未执行真实通过。
+新增 `tests/concurrency/postgresql/test_postgresql_idempotency_concurrency.py`，用于真实 PostgreSQL 两个独立 Repository 实例并发 claim。该用例已在 gateway server PostgreSQL 16 上随 `pytest -m postgresql` 执行通过。
 
 ## 25. migration 测试
 
-已新增 Alembic env 和 migration chain；本机未执行 `alembic upgrade/downgrade`，原因同上。
+已新增 Alembic env 和 migration chain；control database 与 target database 均已在 gateway server PostgreSQL 16 上执行 `current -> downgrade -1 -> upgrade head -> current` 并回到 `0005 (head)`。
 
 ## 26. 故障测试
 
-已实现错误映射单元测试。PostgreSQL 停止/重启、statement timeout、pool timeout、migration 未执行、audit insert 失败等真实故障测试尚未在本机执行。
+已实现错误映射单元测试，并在真实 PostgreSQL 上覆盖连接、Repository、Adapter 安全拒绝、并发幂等 claim。PostgreSQL 停止/重启、statement timeout、pool timeout、migration 未执行、audit insert 失败等故障注入测试尚未执行。
 
 ## 27. 覆盖率
 
-本机无 PostgreSQL 环境时：
+本机 Python 3.12 + gateway server PostgreSQL 16 组合执行：
 
 ```text
-TOTAL 2043 statements, 430 missed, 79% coverage
+coverage run -m pytest -q
+coverage run --append -m pytest -m postgresql -q
+coverage report --fail-under=85
 ```
 
-未达到 Phase 2 要求的 85%。主要缺口是真实 PostgreSQL Repository/Adapter 测试被 skip。未通过 omit 核心代码掩盖。
+结果：
+
+```text
+TOTAL 2600 statements, 324 missed, 88% coverage
+```
+
+已达到 Phase 2 要求的 85%。未通过 omit 核心代码掩盖。
 
 ## 28. 性能基础结果
 
-未完成真实 PostgreSQL 性能基础验证，因为本机没有 Docker/PostgreSQL。不能对外声称任何生产性能。
+本阶段完成 PostgreSQL 16 功能正确性、migration 往返、并发幂等基础验证；未执行正式性能压测，不能对外声称生产性能容量。
 
 ## 29. 未完成项
 
-- 本机真实 PostgreSQL 集成测试未执行通过。
-- 本机 Alembic upgrade/downgrade 未执行。
-- 覆盖率未达到 85%。
 - PostgreSQL 停止/重启和故障恢复测试未执行。
 - 性能基础验证未执行。
 - GitHub CI workflow 已新增，但未获得远程 CI 通过证据。
@@ -241,7 +260,7 @@ TOTAL 2043 statements, 430 missed, 79% coverage
 
 - 当前 `platform_records` 目标表 migration 和 control-plane migration 在同一 Alembic chain 中，生产拆分为两个 database 时需要分别执行或拆分 Alembic 配置。
 - 跨 control database 与 target database 的审计/业务写入不能强一致，本实现不声称跨 database 原子性。
-- `SQLAlchemyPostgreSQLAdapter` 已有真实 CRUD 路径，但必须在 PostgreSQL 16 上补齐更完整的 rollback、timeout、deadlock、pool exhaustion 测试。
+- `SQLAlchemyPostgreSQLAdapter` 已有真实 CRUD 路径，但仍需补齐更完整的 rollback、timeout、deadlock、pool exhaustion 测试。
 
 ## 31. 最终提交 SHA
 

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from data_control_service.config.settings import Settings
 from data_control_service.domain.exceptions import DataControlError
@@ -31,14 +32,21 @@ class DatabaseManager:
             },
             "timeout": settings.database_connect_timeout_seconds,
         }
-        self.engine: AsyncEngine = create_async_engine(
-            url,
-            pool_pre_ping=True,
-            pool_size=settings.database_pool_size,
-            max_overflow=settings.database_max_overflow,
-            pool_timeout=settings.database_pool_timeout_seconds,
-            connect_args=connect_args,
-        )
+        engine_options = {
+            "pool_pre_ping": True,
+            "connect_args": connect_args,
+        }
+        if settings.app_env == "test":
+            engine_options["poolclass"] = NullPool
+        else:
+            engine_options.update(
+                {
+                    "pool_size": settings.database_pool_size,
+                    "max_overflow": settings.database_max_overflow,
+                    "pool_timeout": settings.database_pool_timeout_seconds,
+                }
+            )
+        self.engine: AsyncEngine = create_async_engine(url, **engine_options)
         self.session_factory = async_sessionmaker(
             bind=self.engine,
             class_=AsyncSession,
