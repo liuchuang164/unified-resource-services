@@ -72,6 +72,12 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
     ),
     "ADAPTER_UNAVAILABLE": ErrorSpec(503, True, ErrorCategory.ADAPTER, "adapter is unavailable"),
     "ADAPTER_TIMEOUT": ErrorSpec(504, True, ErrorCategory.ADAPTER, "adapter timed out"),
+    "ADAPTER_AUTHENTICATION_FAILED": ErrorSpec(
+        503, False, ErrorCategory.ADAPTER, "adapter authentication failed"
+    ),
+    "ADAPTER_CAPACITY_EXCEEDED": ErrorSpec(
+        503, True, ErrorCategory.ADAPTER, "adapter capacity exceeded"
+    ),
     "ADAPTER_RESPONSE_INVALID": ErrorSpec(
         502, True, ErrorCategory.ADAPTER, "adapter response is invalid"
     ),
@@ -79,6 +85,9 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
     "DATA_CONSTRAINT_VIOLATION": ErrorSpec(
         422, False, ErrorCategory.DATA, "data constraint violation"
     ),
+    "DATA_CONFLICT": ErrorSpec(409, True, ErrorCategory.DATA, "data conflict"),
+    "LOCK_NOT_ACQUIRED": ErrorSpec(409, True, ErrorCategory.DATA, "lock was not acquired"),
+    "LOCK_TOKEN_MISMATCH": ErrorSpec(409, False, ErrorCategory.DATA, "lock token does not match"),
     "LOCK_CONFLICT": ErrorSpec(409, True, ErrorCategory.DATA, "resource lock conflict"),
     "RESOURCE_VERSION_CONFLICT": ErrorSpec(
         409, True, ErrorCategory.DATA, "resource version conflict"

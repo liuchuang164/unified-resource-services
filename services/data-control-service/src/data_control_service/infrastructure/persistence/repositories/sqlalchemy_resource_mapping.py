@@ -51,6 +51,43 @@ class SQLAlchemyResourceMappingRepository(ResourceMappingRepository):
         if model is None:
             return None
         operations = frozenset(Operation(item) for item in model.allowed_operations)
+        if DataTarget(model.target) == DataTarget.REDIS:
+            config = dict(model.physical_config or {})
+            return ResourceMapping(
+                tenant_id=model.tenant_id,
+                biz_domain=model.biz_domain,
+                definition=ResourceDefinition(
+                    resource_type=model.resource_type,
+                    logical_name=model.resource_name,
+                    target=DataTarget.REDIS,
+                    allowed_operations=operations,
+                    read_permission=f"data:{model.resource_name}:read",
+                    write_permission=f"data:{model.resource_name}:write",
+                    high_risk_operations=frozenset(
+                        {Operation.DELETE, Operation.LOCK, Operation.UNLOCK}
+                    ),
+                    data_constraints={
+                        "default_ttl_seconds": config.get("default_ttl_seconds"),
+                        "max_ttl_seconds": config.get("max_ttl_seconds"),
+                        "lock_default_ttl_seconds": config.get("lock_default_ttl_seconds"),
+                        "lock_max_ttl_seconds": config.get("lock_max_ttl_seconds"),
+                        "value_type": config.get("value_type", "JSON"),
+                        "max_value_bytes": config.get("max_value_bytes"),
+                        "allow_permanent_keys": config.get("allow_permanent_keys", False),
+                    },
+                ),
+                physical_mapping={
+                    "key_prefix": config.get("key_prefix", model.physical_schema),
+                    "resource_name": model.resource_name,
+                    "default_ttl_seconds": config.get("default_ttl_seconds"),
+                    "max_ttl_seconds": config.get("max_ttl_seconds"),
+                    "lock_default_ttl_seconds": config.get("lock_default_ttl_seconds"),
+                    "lock_max_ttl_seconds": config.get("lock_max_ttl_seconds"),
+                    "value_type": config.get("value_type", "JSON"),
+                    "max_value_bytes": config.get("max_value_bytes"),
+                    "allow_permanent_keys": config.get("allow_permanent_keys", False),
+                },
+            )
         write_operations = {
             Operation.CREATE,
             Operation.UPDATE,

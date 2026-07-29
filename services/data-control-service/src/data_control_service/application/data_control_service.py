@@ -246,6 +246,11 @@ class DataControlService:
                 "status": "ok" if ok else "error",
                 "required": health.required,
             }
+            if target.value == "REDIS":
+                components["redis_adapter"] = {
+                    "status": "ok" if ok else "error",
+                    "required": health.required,
+                }
         state = "READY"
         if not ready:
             state = "NOT_READY"

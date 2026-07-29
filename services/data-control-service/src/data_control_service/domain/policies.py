@@ -110,6 +110,7 @@ def create_default_resource_registry() -> ResourceRegistry:
                     allowed_operations=frozenset(
                         {
                             Operation.GET,
+                            Operation.EXISTS,
                             Operation.UPSERT,
                             Operation.DELETE,
                             Operation.LOCK,
@@ -118,8 +119,30 @@ def create_default_resource_registry() -> ResourceRegistry:
                     ),
                     read_permission="data:cache:read",
                     write_permission="data:cache:write",
+                    high_risk_operations=frozenset(
+                        {Operation.DELETE, Operation.LOCK, Operation.UNLOCK}
+                    ),
+                    data_constraints={
+                        "default_ttl_seconds": 3600,
+                        "max_ttl_seconds": 86_400,
+                        "lock_default_ttl_seconds": 30,
+                        "lock_max_ttl_seconds": 300,
+                        "value_type": "JSON",
+                        "max_value_bytes": 65_536,
+                        "allow_permanent_keys": False,
+                    },
                 ),
-                physical_mapping={"namespace": "dcs"},
+                physical_mapping={
+                    "key_prefix": "dcs",
+                    "resource_name": "cache",
+                    "default_ttl_seconds": 3600,
+                    "max_ttl_seconds": 86_400,
+                    "lock_default_ttl_seconds": 30,
+                    "lock_max_ttl_seconds": 300,
+                    "value_type": "JSON",
+                    "max_value_bytes": 65_536,
+                    "allow_permanent_keys": False,
+                },
             ),
             ResourceMapping(
                 tenant_id="tenant_demo",

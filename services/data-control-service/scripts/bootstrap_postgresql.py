@@ -77,6 +77,66 @@ async def main() -> None:
                             updated_at=now,
                         )
                     )
+                redis_mapping_exists = await session.execute(
+                    select(ResourceMappingModel.id).where(
+                        ResourceMappingModel.tenant_id == "tenant_demo",
+                        ResourceMappingModel.biz_domain == "demo",
+                        ResourceMappingModel.target == "REDIS",
+                        ResourceMappingModel.resource_type == "CACHE_ENTRY",
+                        ResourceMappingModel.resource_name == "cache",
+                        ResourceMappingModel.enabled.is_(True),
+                    )
+                )
+                if redis_mapping_exists.scalar_one_or_none() is None:
+                    session.add(
+                        ResourceMappingModel(
+                            id=f"resmap_{uuid4().hex}",
+                            tenant_id="tenant_demo",
+                            biz_domain="demo",
+                            target="REDIS",
+                            resource_type="CACHE_ENTRY",
+                            resource_name="cache",
+                            physical_schema="dcs",
+                            physical_table="cache",
+                            primary_key_column="logical_key",
+                            tenant_column="tenant_id",
+                            biz_domain_column="biz_domain",
+                            allowed_operations=[
+                                "GET",
+                                "EXISTS",
+                                "UPSERT",
+                                "DELETE",
+                                "LOCK",
+                                "UNLOCK",
+                            ],
+                            upsert_conflict_columns=[],
+                            field_allowlist=[
+                                "logical_key",
+                                "value",
+                                "ttl_seconds",
+                                "only_if_absent",
+                                "only_if_present",
+                                "lock_token",
+                            ],
+                            filter_allowlist=[],
+                            sort_allowlist=[],
+                            physical_config={
+                                "key_prefix": "dcs",
+                                "default_ttl_seconds": settings.redis_default_ttl_seconds,
+                                "max_ttl_seconds": settings.redis_max_ttl_seconds,
+                                "lock_default_ttl_seconds": settings.redis_lock_default_ttl_seconds,
+                                "lock_max_ttl_seconds": settings.redis_lock_max_ttl_seconds,
+                                "value_type": "JSON",
+                                "max_value_bytes": settings.redis_max_value_bytes,
+                                "allow_permanent_keys": False,
+                            },
+                            max_page_size=1,
+                            enabled=True,
+                            version=1,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
                 policy_exists = await session.execute(
                     select(PolicyBindingModel.id).where(
                         PolicyBindingModel.tenant_id == "tenant_demo",
@@ -101,6 +161,40 @@ async def main() -> None:
                             target="POSTGRESQL",
                             resource_type="DOCUMENT_RECORD",
                             resource_name="record",
+                            effect="ALLOW",
+                            constraints={},
+                            priority=100,
+                            enabled=True,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                redis_policy_exists = await session.execute(
+                    select(PolicyBindingModel.id).where(
+                        PolicyBindingModel.tenant_id == "tenant_demo",
+                        PolicyBindingModel.biz_domain == "demo",
+                        PolicyBindingModel.target == "REDIS",
+                        PolicyBindingModel.resource_type == "CACHE_ENTRY",
+                        PolicyBindingModel.resource_name == "cache",
+                        PolicyBindingModel.effect == "ALLOW",
+                        PolicyBindingModel.enabled.is_(True),
+                    )
+                )
+                if redis_policy_exists.scalar_one_or_none() is None:
+                    session.add(
+                        PolicyBindingModel(
+                            id=f"policy_{uuid4().hex}",
+                            tenant_id="tenant_demo",
+                            biz_domain="demo",
+                            subject_type="SERVICE",
+                            subject_pattern="*",
+                            role=None,
+                            permission=None,
+                            source=None,
+                            operation=None,
+                            target="REDIS",
+                            resource_type="CACHE_ENTRY",
+                            resource_name="cache",
                             effect="ALLOW",
                             constraints={},
                             priority=100,

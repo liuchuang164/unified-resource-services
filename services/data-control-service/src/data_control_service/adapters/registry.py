@@ -10,7 +10,7 @@ from data_control_service.adapters.postgresql import (
     InMemoryPostgreSQLAdapter,
     SQLAlchemyPostgreSQLAdapter,
 )
-from data_control_service.adapters.redis import InMemoryRedisAdapter
+from data_control_service.adapters.redis import InMemoryRedisAdapter, RedisAsyncioAdapter
 from data_control_service.adapters.timescaledb import InMemoryTimescaleDBAdapter
 from data_control_service.config.settings import Settings
 from data_control_service.contracts.enums import DataTarget
@@ -65,6 +65,7 @@ class AdapterRegistry:
 def create_default_registry(
     settings: Settings | None = None,
     postgresql_session_factory: async_sessionmaker[AsyncSession] | None = None,
+    redis_client: object | None = None,
 ) -> AdapterRegistry:
     settings = settings or Settings()
     postgresql_adapter = (
@@ -76,13 +77,18 @@ def create_default_registry(
         if settings.postgresql_adapter_enabled and postgresql_session_factory is not None
         else InMemoryPostgreSQLAdapter()
     )
+    redis_adapter = (
+        RedisAsyncioAdapter(redis_client, settings)  # type: ignore[arg-type]
+        if settings.redis_adapter_enabled and redis_client is not None
+        else InMemoryRedisAdapter(settings.redis_max_ttl_seconds)
+    )
     return AdapterRegistry(
         [
             postgresql_adapter,
             InMemoryMinIOAdapter(
                 settings.max_object_size_bytes, settings.max_presigned_url_ttl_seconds
             ),
-            InMemoryRedisAdapter(settings.max_redis_ttl_seconds),
+            redis_adapter,
             InMemoryNeo4jAdapter(),
             InMemoryMilvusAdapter(settings.max_vector_top_k),
             InMemoryTimescaleDBAdapter(settings.max_timeseries_query_days),

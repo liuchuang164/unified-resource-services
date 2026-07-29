@@ -17,6 +17,7 @@ class SubjectType(StrEnum):
 
 class Operation(StrEnum):
     GET = "GET"
+    EXISTS = "EXISTS"
     LIST = "LIST"
     SEARCH = "SEARCH"
     CREATE = "CREATE"

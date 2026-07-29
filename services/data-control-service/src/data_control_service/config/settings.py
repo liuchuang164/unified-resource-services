@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     auth_provider: str = "development"
     control_database_url: str | None = None
     control_database_migration_url: str | None = None
-    control_migration_head_revision: str = "0005"
+    control_migration_head_revision: str = "0006"
     postgresql_adapter_enabled: bool = False
     postgresql_adapter_required: bool = True
     postgresql_adapter_database_url: str | None = None
@@ -21,6 +21,22 @@ class Settings(BaseSettings):
     database_pool_timeout_seconds: int = Field(default=30, ge=1)
     database_statement_timeout_ms: int = Field(default=5000, ge=100)
     database_connect_timeout_seconds: int = Field(default=10, ge=1)
+    redis_adapter_enabled: bool = False
+    redis_adapter_required: bool = True
+    redis_url: str | None = None
+    redis_username: str | None = None
+    redis_password: str | None = None
+    redis_socket_connect_timeout_seconds: float = Field(default=2.0, gt=0)
+    redis_socket_timeout_seconds: float = Field(default=2.0, gt=0)
+    redis_health_check_interval_seconds: int = Field(default=30, ge=0)
+    redis_max_connections: int = Field(default=50, ge=1)
+    redis_default_ttl_seconds: int = Field(default=3600, ge=1)
+    redis_max_ttl_seconds: int = Field(default=86_400, ge=1)
+    redis_lock_default_ttl_seconds: int = Field(default=30, ge=1)
+    redis_lock_max_ttl_seconds: int = Field(default=300, ge=1)
+    redis_key_prefix: str = Field(default="dcs", min_length=1, max_length=32)
+    redis_scan_disabled: bool = True
+    redis_max_value_bytes: int = Field(default=65_536, ge=1)
     idempotency_processing_timeout_seconds: int = Field(default=120, ge=1)
     idempotency_recovery_max_attempts: int = Field(default=3, ge=1, le=10)
     audit_enabled: bool = True

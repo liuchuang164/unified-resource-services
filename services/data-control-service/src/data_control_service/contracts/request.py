@@ -48,12 +48,15 @@ class Payload(BaseModel):
     @model_validator(mode="after")
     def reject_raw_query_surfaces(self) -> "Payload":
         forbidden = {
+            "acl",
+            "auth",
             "sql",
             "raw_sql",
             "cypher",
             "raw_cypher",
             "redis_command",
             "command",
+            "raw_command",
             "connection_string",
             "bucket",
             "object_key",
@@ -64,18 +67,51 @@ class Payload(BaseModel):
             "order_by_sql",
             "join_sql",
             "database_url",
+            "redis_url",
+            "host",
+            "port",
+            "password",
             "stored_procedure",
             "function",
+            "script",
+            "lua",
+            "eval",
+            "evalsha",
+            "keys",
+            "scan",
+            "scan_iter",
+            "flushdb",
+            "flushall",
+            "config",
+            "module",
+            "script_load",
+            "client_kill",
+            "shutdown",
+            "monitor",
+            "migrate",
+            "replicaof",
+            "slaveof",
+            "cluster",
+            "select",
         }
         for section_name, section in (
             ("data", self.data),
             ("query", self.query),
             ("options", self.options),
         ):
-            lower_keys = {key.lower() for key in section}
-            if lower_keys & forbidden:
+            if self._contains_forbidden_key(section, forbidden):
                 raise ValueError(f"{section_name} contains forbidden raw access fields")
         return self
+
+    @classmethod
+    def _contains_forbidden_key(cls, value: Any, forbidden: set[str]) -> bool:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if str(key).lower() in forbidden or cls._contains_forbidden_key(item, forbidden):
+                    return True
+        if isinstance(value, list):
+            return any(cls._contains_forbidden_key(item, forbidden) for item in value)
+        return False
 
 
 class TransactionOptions(BaseModel):

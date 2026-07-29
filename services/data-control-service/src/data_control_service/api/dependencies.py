@@ -13,6 +13,7 @@ from data_control_service.application.idempotency_service import IdempotencyServ
 from data_control_service.application.routing_service import RoutingService
 from data_control_service.application.transaction_orchestrator import TransactionOrchestrator
 from data_control_service.config.settings import Settings
+from data_control_service.contracts.enums import DataTarget
 from data_control_service.domain.exceptions import DataControlError
 from data_control_service.domain.policies import create_default_resource_registry
 from data_control_service.infrastructure.auth.development_auth_provider import (
@@ -30,6 +31,7 @@ from data_control_service.infrastructure.persistence.repositories import (
     SQLAlchemyPolicyRepository,
     SQLAlchemyResourceMappingRepository,
 )
+from data_control_service.infrastructure.redis.manager import RedisManager
 from data_control_service.infrastructure.resources.in_memory import (
     InMemoryResourceMappingRepository,
 )
@@ -67,6 +69,18 @@ def get_target_postgresql_manager() -> DatabaseManager | None:
     )
 
 
+@lru_cache
+def get_redis_manager() -> RedisManager | None:
+    settings = get_settings()
+    if not settings.redis_adapter_enabled:
+        return None
+    if not settings.redis_url:
+        if settings.redis_adapter_required or settings.app_env in {"production", "test"}:
+            raise DataControlError("CONFIGURATION_INVALID", "REDIS_URL is required")
+        return None
+    return RedisManager(settings)
+
+
 async def close_database_managers() -> None:
     control_database = get_control_database_manager()
     target_database = get_target_postgresql_manager()
@@ -74,9 +88,13 @@ async def close_database_managers() -> None:
         await control_database.close()
     if target_database is not None and target_database is not control_database:
         await target_database.close()
+    redis_manager = get_redis_manager()
+    if redis_manager is not None:
+        await redis_manager.close()
     get_data_control_service.cache_clear()
     get_control_database_manager.cache_clear()
     get_target_postgresql_manager.cache_clear()
+    get_redis_manager.cache_clear()
 
 
 @lru_cache
@@ -84,6 +102,7 @@ def get_data_control_service() -> DataControlService:
     settings = get_settings()
     control_database = get_control_database_manager()
     target_database = get_target_postgresql_manager()
+    redis_manager = get_redis_manager()
     audit_repository: AuditRepository | InMemoryAuditService
     if control_database is not None:
         resource_repository: ResourceMappingRepository = SQLAlchemyResourceMappingRepository(
@@ -128,6 +147,32 @@ def get_data_control_service() -> DataControlService:
             schema="data_target",
             expected_revision=settings.target_migration_head_revision,
         )
+    redis_client = None
+    if redis_manager is not None:
+        readiness_checks["redis_connection"] = redis_manager.ping
+
+        async def redis_mapping_health() -> dict[str, str]:
+            async_getter = getattr(resource_repository, "get_mapping_async", None)
+            if async_getter is not None:
+                mapping = await async_getter(
+                    tenant_id="tenant_demo",
+                    biz_domain="demo",
+                    target=DataTarget.REDIS,
+                    resource_type="CACHE_ENTRY",
+                    logical_name="cache",
+                )
+            else:
+                mapping = resource_repository.get_mapping(
+                    tenant_id="tenant_demo",
+                    biz_domain="demo",
+                    target=DataTarget.REDIS,
+                    resource_type="CACHE_ENTRY",
+                    logical_name="cache",
+                )
+            return {"status": "ok" if mapping is not None else "error"}
+
+        readiness_checks["redis_resource_mapping"] = redis_mapping_health
+        redis_client = redis_manager.client()
     return DataControlService(
         context_resolver=ContextResolver(),
         authorization_service=AuthorizationService(policy_repository),
@@ -137,6 +182,7 @@ def get_data_control_service() -> DataControlService:
         adapter_registry=create_default_registry(
             settings,
             target_database.session_factory if target_database is not None else None,
+            redis_client,
         ),
         audit_service=audit_service,
         readiness_checks=readiness_checks,

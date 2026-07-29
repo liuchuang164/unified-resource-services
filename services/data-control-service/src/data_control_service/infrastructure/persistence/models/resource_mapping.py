@@ -39,6 +39,7 @@ class ResourceMappingModel(Base):
     field_allowlist: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     filter_allowlist: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     sort_allowlist: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    physical_config: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
     max_page_size: Mapped[int] = mapped_column(Integer, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)

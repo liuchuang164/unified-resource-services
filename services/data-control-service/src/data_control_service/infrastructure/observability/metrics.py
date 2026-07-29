@@ -18,6 +18,12 @@ class MetricsRegistry:
         with self._lock:
             self._gauges[name] = value
 
+    def observe(self, name: str, value: float) -> None:
+        with self._lock:
+            self._counters[f"{name}_count"] += 1
+            self._gauges[f"{name}_sum"] = self._gauges.get(f"{name}_sum", 0.0) + value
+            self._gauges[f"{name}_max"] = max(self._gauges.get(f"{name}_max", 0.0), value)
+
     def snapshot(self) -> dict[str, float]:
         with self._lock:
             return {**self._counters, **self._gauges}

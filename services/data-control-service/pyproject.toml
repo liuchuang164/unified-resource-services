@@ -14,6 +14,7 @@ dependencies = [
   "asyncpg>=0.29.0",
   "greenlet>=3.0.0",
   "psycopg[binary]>=3.2.0",
+  "redis[hiredis]>=5.0.0",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +43,7 @@ markers = [
   "performance: records development-only baseline timings",
   "reliability: exercises real PostgreSQL reliability behavior",
   "consistency: exercises outbox and idempotency recovery consistency behavior",
+  "redis: requires a real Redis 7 server",
 ]
 
 [tool.ruff]
