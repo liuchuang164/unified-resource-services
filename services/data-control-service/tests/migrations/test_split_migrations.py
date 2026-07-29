@@ -21,11 +21,11 @@ def test_control_migration_upgrade_downgrade_roundtrip() -> None:
     env = {**os.environ, "CONTROL_DATABASE_MIGRATION_URL": control_url}
     _run([sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", "head"], env)
     current = _run([sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "current"], env)
-    assert "0005" in current.stdout
+    assert "0006" in current.stdout
     _run([sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "downgrade", "-1"], env)
     _run([sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", "head"], env)
     current = _run([sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "current"], env)
-    assert "0005" in current.stdout
+    assert "0006" in current.stdout
 
 
 @pytest.mark.migration

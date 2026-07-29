@@ -1,0 +1,50 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "56379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  postgres-control:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: data_control
+      POSTGRES_PASSWORD: change_me
+      POSTGRES_DB: dcs_control_redis
+    ports:
+      - "56432:5432"
+    volumes:
+      - postgres-control-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U data_control -d dcs_control_redis"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  postgres-target:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: data_control
+      POSTGRES_PASSWORD: change_me
+      POSTGRES_DB: dcs_target_redis
+    ports:
+      - "56433:5432"
+    volumes:
+      - postgres-target-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U data_control -d dcs_target_redis"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  redis-data:
+  postgres-control-data:
+  postgres-target-data:

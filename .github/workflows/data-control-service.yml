@@ -33,6 +33,15 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     env:
       APP_ENV: test
       AUTH_PROVIDER: development
@@ -42,6 +51,9 @@ jobs:
       POSTGRESQL_ADAPTER_REQUIRED: "true"
       POSTGRESQL_ADAPTER_DATABASE_URL: postgresql+asyncpg://data_control:change_me@localhost:5432/dcs_target_test
       TARGET_DATABASE_MIGRATION_URL: postgresql+psycopg://data_control:change_me@localhost:5432/dcs_target_test
+      REDIS_ADAPTER_ENABLED: "true"
+      REDIS_ADAPTER_REQUIRED: "true"
+      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -83,13 +95,16 @@ jobs:
         run: |
           unset CONTROL_DATABASE_URL CONTROL_DATABASE_MIGRATION_URL
           unset POSTGRESQL_ADAPTER_DATABASE_URL TARGET_DATABASE_MIGRATION_URL
-          APP_ENV=development POSTGRESQL_ADAPTER_ENABLED=false pytest -q
+          unset REDIS_URL
+          APP_ENV=development POSTGRESQL_ADAPTER_ENABLED=false REDIS_ADAPTER_ENABLED=false pytest -q
       - name: PostgreSQL integration tests
         run: pytest -m postgresql -q
       - name: PostgreSQL reliability tests
         run: pytest -m reliability -q
       - name: PostgreSQL consistency tests
         run: pytest -m consistency -q
+      - name: Redis integration and security tests
+        run: pytest -m redis -q
       - name: Migration tests
         run: pytest -m migration -q
       - name: Performance baseline smoke tests
@@ -109,6 +124,7 @@ jobs:
           coverage run --append -m pytest -m postgresql -q
           coverage run --append -m pytest -m reliability -q
           coverage run --append -m pytest -m consistency -q
+          coverage run --append -m pytest -m redis -q
           coverage report --fail-under=85
       - name: Secret scan
         run: |
@@ -163,3 +179,56 @@ jobs:
       - name: Cleanup dedicated PostgreSQL pair
         if: always()
         run: docker compose -f docker-compose.reliability.yml down -v
+
+  redis-stop-start:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/data-control-service
+    env:
+      APP_ENV: test
+      AUTH_PROVIDER: development
+      CONTROL_DATABASE_URL: postgresql+asyncpg://data_control:change_me@localhost:56432/dcs_control_redis
+      CONTROL_DATABASE_MIGRATION_URL: postgresql+psycopg://data_control:change_me@localhost:56432/dcs_control_redis
+      POSTGRESQL_ADAPTER_ENABLED: "true"
+      POSTGRESQL_ADAPTER_REQUIRED: "true"
+      POSTGRESQL_ADAPTER_DATABASE_URL: postgresql+asyncpg://data_control:change_me@localhost:56433/dcs_target_redis
+      TARGET_DATABASE_MIGRATION_URL: postgresql+psycopg://data_control:change_me@localhost:56433/dcs_target_redis
+      REDIS_ADAPTER_ENABLED: "true"
+      REDIS_ADAPTER_REQUIRED: "true"
+      REDIS_URL: redis://localhost:56379/0
+      REDIS_RELIABILITY_COMPOSE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Start dedicated Redis stack
+        run: docker compose -f docker-compose.redis.yml up -d
+      - name: Wait for Redis stack
+        run: |
+          for i in {1..30}; do
+            if docker compose -f docker-compose.redis.yml exec -T redis redis-cli ping \
+              && docker compose -f docker-compose.redis.yml exec -T postgres-control pg_isready -U data_control -d dcs_control_redis \
+              && docker compose -f docker-compose.redis.yml exec -T postgres-target pg_isready -U data_control -d dcs_target_redis; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.redis.yml ps
+          exit 1
+      - name: Migration control
+        run: alembic -c alembic-control.ini upgrade head
+      - name: Migration target
+        run: alembic -c alembic-target.ini upgrade head
+      - name: Bootstrap metadata
+        run: python scripts/bootstrap_postgresql.py
+      - name: Redis stop start reliability test
+        run: pytest tests/reliability/redis/test_stop_start.py -q
+      - name: Cleanup dedicated Redis stack
+        if: always()
+        run: docker compose -f docker-compose.redis.yml down -v

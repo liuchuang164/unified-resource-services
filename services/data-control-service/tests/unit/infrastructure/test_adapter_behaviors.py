@@ -52,15 +52,16 @@ async def test_minio_create_get_list_and_delete() -> None:
 
 async def test_redis_upsert_get_delete_lock_unlock() -> None:
     adapter = InMemoryRedisAdapter()
+    token = "redis-lock-" + "0123456789abcdef"
     upsert = _with_mapping(
         command(Operation.UPSERT, {"logical_key": "k", "value": "v", "ttl_seconds": 60}),
         2,
     )
     get = _with_mapping(command(Operation.GET, {"logical_key": "k"}), 2)
     lock = _with_mapping(
-        command(Operation.LOCK, {"logical_key": "lk", "token": "t", "ttl_seconds": 60}), 2
+        command(Operation.LOCK, {"logical_key": "lk", "token": token, "ttl_seconds": 60}), 2
     )
-    unlock = _with_mapping(command(Operation.UNLOCK, {"logical_key": "lk", "token": "t"}), 2)
+    unlock = _with_mapping(command(Operation.UNLOCK, {"logical_key": "lk", "token": token}), 2)
     delete = _with_mapping(command(Operation.DELETE, {"logical_key": "k"}), 2)
     await adapter.execute(upsert, context())
     assert (await adapter.execute(get, context())).data["value"] == "v"
