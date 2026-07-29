@@ -1,9 +1,15 @@
 from typing import Any
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
-from data_control_service.api.dependencies import get_data_control_service
+from data_control_service.api.dependencies import (
+    get_control_database_manager,
+    get_data_control_service,
+    get_settings,
+    get_target_postgresql_manager,
+)
+from data_control_service.app import create_app
 from data_control_service.ports.idempotency_repository import IdempotencyRepository
 
 
@@ -72,7 +78,7 @@ def recovery_request() -> dict[str, Any]:
 
 @pytest.mark.consistency
 async def test_mark_succeeded_failure_enters_recovery_without_duplicate_write(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for name in (
         "CONTROL_DATABASE_URL",
@@ -83,13 +89,26 @@ async def test_mark_succeeded_failure_enters_recovery_without_duplicate_write(
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("POSTGRESQL_ADAPTER_ENABLED", "false")
+    get_settings.cache_clear()
+    get_control_database_manager.cache_clear()
+    get_target_postgresql_manager.cache_clear()
     get_data_control_service.cache_clear()
     service = get_data_control_service()
     wrapped = FailOnceMarkSucceededRepository(service._idempotency_service._repository)
     monkeypatch.setattr(service._idempotency_service, "_repository", wrapped)
-
-    first = await client.post("/data/dispatch", json=recovery_request())
-    second = await client.post("/data/dispatch", json=recovery_request())
+    app = create_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={
+            "x-dev-subject-id": "svc_demo",
+            "x-dev-tenant-id": "tenant_demo",
+            "x-dev-biz-domains": "demo",
+            "x-dev-permissions": "data:record:read,data:record:write",
+        },
+    ) as client:
+        first = await client.post("/data/dispatch", json=recovery_request())
+        second = await client.post("/data/dispatch", json=recovery_request())
 
     assert first.status_code == 409
     assert first.json()["code"] == "IDEMPOTENCY_RECOVERY_REQUIRED"
