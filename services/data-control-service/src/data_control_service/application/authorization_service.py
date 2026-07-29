@@ -2,7 +2,7 @@ from data_control_service.contracts.enums import WRITE_OPERATIONS
 from data_control_service.contracts.request import DataRequest
 from data_control_service.domain.exceptions import DataControlError
 from data_control_service.domain.models import ExecutionContext
-from data_control_service.domain.policies import ResourceRegistration
+from data_control_service.domain.policies import ResourceMapping
 
 
 class AuthorizationService:
@@ -10,16 +10,15 @@ class AuthorizationService:
         self,
         request: DataRequest,
         context: ExecutionContext,
-        registration: ResourceRegistration,
+        registration: ResourceMapping,
     ) -> None:
         if (
             context.tenant_id != request.auth_context.tenant_id
             or context.biz_domain != request.auth_context.biz_domain
         ):
             raise DataControlError("AUTH_SCOPE_MISMATCH")
-        if context.biz_domain not in registration.allowed_biz_domains:
-            raise DataControlError("AUTH_SCOPE_MISMATCH")
-        if request.operation not in registration.allowed_operations:
+        definition = registration.definition
+        if request.operation not in definition.allowed_operations:
             raise DataControlError("OPERATION_NOT_SUPPORTED")
 
         permissions = set(context.permissions)
@@ -27,10 +26,10 @@ class AuthorizationService:
         if "DATA_CONTROL_ADMIN" in roles:
             return
 
-        required = set(registration.required_permissions)
+        required = {definition.read_permission}
         if request.operation in WRITE_OPERATIONS:
-            required.add(f"data:{registration.name}:write")
-        if request.operation in registration.high_risk_operations:
+            required.add(definition.write_permission)
+        if request.operation in definition.high_risk_operations:
             required.add("data:high-risk:execute")
 
         if not required.issubset(permissions):

@@ -1,0 +1,9 @@
+resources:
+  - tenant_id: tenant_demo
+    biz_domain: demo
+    logical_name: record
+    target: POSTGRESQL
+    resource_type: DOCUMENT_RECORD
+    physical_mapping:
+      logical_table: document_records
+      primary_key: id
