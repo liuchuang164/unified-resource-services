@@ -95,14 +95,17 @@ Adapter 不返回驱动堆栈给 API 层；原始异常先映射为内部异常�
 
 约束：
 
-- Key 固定前缀：`tenant:{tenant_id}:{biz_domain}:...`。
+- Key 固定命名空间：`{prefix}:{tenant_id}:{biz_domain}:{resource}:{logical_key}`，默认 prefix 为 `dcs`。
+- Resource Mapping 必须服务端持久化 Redis 物理配置，包括 `resource_name`、TTL 上限、默认 TTL、value 类型和 value size 上限。
 - 只允许预注册操作，不开放任意 Redis Command。
-- 所有缓存项必须有 TTL 策略；永久项必须显式声明。
-- 分布式锁必须有 owner token、租约和安全释放逻辑。
+- 所有缓存项必须有 TTL 策略；永久项必须显式声明，本阶段默认不允许永久 key。
+- 分布式锁必须有 owner token、租约和安全释放逻辑；锁使用 `SET key token PX ttl NX`，解锁只允许固定 compare-and-delete Lua。
 - 幂等记录状态转换必须原子化。
-- 禁止跨租户 Scan；管理扫描也必须限量和审计。
+- 禁止跨租户 Scan；本阶段运行时禁用 `SCAN/KEYS/FLUSH/CONFIG/MODULE/ACL/AUTH/SELECT/EVAL` 等客户端透传。
+- 序列化只允许 UTF-8 string、JSON 和 integer，不使用 pickle。
+- Redis driver 使用 `redis.asyncio` 与连接池；shutdown 必须关闭 client/pool，readiness 必须 ping 真实 Redis。
 
-首阶段能力：`GET/UPSERT/DELETE/LOCK/UNLOCK`。
+首阶段能力：`GET/EXISTS/UPSERT/DELETE/LOCK/UNLOCK`。
 
 ## 7. Neo4j Adapter
 

@@ -75,6 +75,7 @@
 - `UPDATE`
 - `UPSERT`
 - `DELETE`
+- `EXISTS`
 - `BATCH`
 - `LOCK`
 - `UNLOCK`
@@ -96,10 +97,12 @@ Adapter 只实现其声明支持的能力。未支持操作返回稳定错误，
 禁止：
 
 - raw SQL / raw Cypher；
-- 任意 Redis 命令；
+- 任意 Redis 命令、Lua 脚本、Scan/Keys/Flush/Config/Module/ACL/Auth/Select 等管理面参数；
 - 任意表达式拼接；
 - 未注册对象路径；
 - 绕过最大分页和批量限制的参数。
+
+Redis `CACHE_ENTRY` 资源只接受服务端注册的逻辑字段：`logical_key`、`value`、`ttl_seconds`、`only_if_absent`、`only_if_present`、`lock_token`。物理 key 由 Resource Mapping 和可信 `tenant_id + biz_domain` 生成，调用方不得传 Redis URL、host、password、完整 key 或命令文本。
 
 ## 3. DataResponse
 
@@ -167,7 +170,7 @@ Adapter 只实现其声明支持的能力。未支持操作返回稳定错误，
 
 ## 6. 幂等语义
 
-- `CREATE / UPDATE / UPSERT / DELETE / BATCH / LOCK / UNLOCK` 默认视为写操作。
+- `CREATE / UPDATE / UPSERT / DELETE / BATCH / LOCK / UNLOCK` 默认视为写操作；`GET / LIST / SEARCH / EXISTS` 视为读操作。
 - 幂等摘要由规范化后的关键请求字段计算。
 - 首次请求处于 `PROCESSING` 时，重复请求返回 `IDEMPOTENCY_IN_PROGRESS`，或在限定时间内等待同一结果。
 - 已成功请求返回原结果并标记 `idempotency_replayed=true`。

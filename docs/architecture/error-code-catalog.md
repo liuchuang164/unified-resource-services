@@ -59,6 +59,8 @@
 | `IDEMPOTENCY_RECOVERY_REQUIRED` | 409 | 否 | 业务写已成功但幂等完成记录需要管理员恢复，重试不会重新写目标库。 |
 | `RESOURCE_VERSION_CONFLICT` | 409 | 是 | 乐观锁版本冲突。 |
 | `LOCK_CONFLICT` | 409 | 是 | 锁被其他执行持有。 |
+| `LOCK_NOT_ACQUIRED` | 409 | 是 | Redis 锁未获得，通常表示同一逻辑资源已有有效租约。 |
+| `LOCK_TOKEN_MISMATCH` | 409 | 否 | 解锁 token 与当前锁 owner 不一致，禁止释放他人锁。 |
 
 ### 3.4 Routing / Adapter
 
@@ -67,6 +69,8 @@
 | `ROUTE_NOT_FOUND` | 422 | 否 | 无匹配路由。 |
 | `ADAPTER_NOT_REGISTERED` | 500 | 否 | 配置声明的 Adapter 未注册。 |
 | `ADAPTER_UNAVAILABLE` | 503 | 是 | Adapter 或连接池不可用。 |
+| `ADAPTER_AUTHENTICATION_FAILED` | 401 | 否 | Adapter 依赖认证失败，如 Redis ACL/密码错误。 |
+| `ADAPTER_CAPACITY_EXCEEDED` | 503 | 是 | Adapter 连接池、并发或容量保护耗尽。 |
 | `ADAPTER_TIMEOUT` | 504 | 是 | 下游执行超时。 |
 | `ADAPTER_RESPONSE_INVALID` | 502 | 视情况 | 下游响应不符合契约。 |
 | `DEPENDENCY_RATE_LIMITED` | 429 | 是 | 下游或本服务限流。 |
@@ -77,6 +81,7 @@
 | Code | HTTP | Retryable | 含义 |
 |---|---:|---:|---|
 | `RESOURCE_NOT_FOUND` | 404 | 否 | 授权范围内资源不存在。 |
+| `DATA_CONFLICT` | 409 | 是 | 数据状态冲突但不属于版本或锁专用错误，例如条件写未满足。 |
 | `DATA_CONSTRAINT_VIOLATION` | 422 | 否 | 唯一性、引用或字段约束失败。 |
 | `TRANSACTION_NOT_SUPPORTED` | 422 | 否 | 请求的事务语义无法满足。 |
 | `TRANSACTION_ROLLED_BACK` | 409 | 是 | 事务因并发或暂时错误回滚。 |
