@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool, text
 from data_control_service.infrastructure.persistence.models.access_audit import (
     AccessAuditLogModel,
 )
+from data_control_service.infrastructure.persistence.models.audit_outbox import AuditOutboxModel
 from data_control_service.infrastructure.persistence.models.base import Base
 from data_control_service.infrastructure.persistence.models.change_audit import (
     ChangeAuditLogModel,
@@ -23,6 +24,7 @@ from data_control_service.infrastructure.persistence.models.resource_mapping imp
 
 _CONTROL_MODELS = (
     AccessAuditLogModel,
+    AuditOutboxModel,
     ChangeAuditLogModel,
     IdempotencyRecordModel,
     PolicyBindingModel,

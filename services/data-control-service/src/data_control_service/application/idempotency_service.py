@@ -59,6 +59,8 @@ class IdempotencyService:
             raise DataControlError("IDEMPOTENCY_KEY_CONFLICT")
         if result.state == IdempotencyClaimState.IN_PROGRESS:
             raise DataControlError("IDEMPOTENCY_IN_PROGRESS")
+        if result.state == IdempotencyClaimState.RECOVERY_REQUIRED:
+            raise DataControlError("IDEMPOTENCY_RECOVERY_REQUIRED")
         if result.state == IdempotencyClaimState.RETRY_FAILED:
             return (result.record_id, result.owner_token or ""), None
         raise DataControlError("INTERNAL_ERROR")
@@ -71,6 +73,29 @@ class IdempotencyService:
         record_id, owner_token = record_ref
         await self._repository.mark_succeeded(
             record_id, owner_token, response.model_dump(mode="json")
+        )
+
+    async def recovery_required(
+        self,
+        record_ref: tuple[str, str] | None,
+        request: DataRequest,
+        *,
+        business_result_reference: dict[str, object],
+        recovery_strategy: str,
+        recovery_metadata: dict[str, object],
+        error_code: str,
+    ) -> None:
+        if record_ref is None or not request.is_write:
+            return
+        record_id, owner_token = record_ref
+        await self._repository.mark_recovery_required(
+            record_id,
+            owner_token,
+            business_result_reference=business_result_reference,
+            recovery_strategy=recovery_strategy,
+            recovery_metadata=recovery_metadata,
+            error_code=error_code,
+            max_recovery_attempts=self._settings.idempotency_recovery_max_attempts,
         )
 
     async def fail(

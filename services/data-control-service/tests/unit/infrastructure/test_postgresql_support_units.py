@@ -59,7 +59,7 @@ def test_postgresql_error_mapper_maps_known_sqlstates() -> None:
     )
     assert (
         PostgreSQLErrorMapper.to_error(IntegrityError("stmt", {}, _Original("40001"))).code
-        == "TRANSACTION_ROLLED_BACK"
+        == "TRANSACTION_SERIALIZATION_FAILURE"
     )
     assert PostgreSQLErrorMapper.to_error(SQLAlchemyTimeoutError()).code == "ADAPTER_TIMEOUT"
     assert (

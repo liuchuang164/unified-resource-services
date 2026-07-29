@@ -126,7 +126,7 @@ async def _prepare_lock_rows(manager: DatabaseManager) -> tuple[str, str]:
 
 @pytest.mark.postgresql
 @pytest.mark.reliability
-async def test_deadlock_maps_to_retryable_transaction_rollback() -> None:
+async def test_deadlock_maps_to_retryable_deadlock_code() -> None:
     _, target_url = require_postgresql_urls()
     manager = DatabaseManager(
         target_url,
@@ -180,7 +180,7 @@ async def test_deadlock_maps_to_retryable_transaction_rollback() -> None:
             for result in results
             if isinstance(result, Exception)
         ]
-        assert "TRANSACTION_ROLLED_BACK" in mapped
+        assert "TRANSACTION_DEADLOCK" in mapped
         assert (await manager.ping())["status"] == "ok"
     finally:
         await manager.close()
@@ -188,7 +188,7 @@ async def test_deadlock_maps_to_retryable_transaction_rollback() -> None:
 
 @pytest.mark.postgresql
 @pytest.mark.reliability
-async def test_serialization_failure_maps_to_retryable_transaction_rollback() -> None:
+async def test_serialization_failure_maps_to_retryable_serialization_code() -> None:
     _, target_url = require_postgresql_urls()
     manager = DatabaseManager(
         target_url,
@@ -271,7 +271,7 @@ async def test_serialization_failure_maps_to_retryable_transaction_rollback() ->
             for result in results
             if isinstance(result, Exception)
         ]
-        assert "TRANSACTION_ROLLED_BACK" in mapped
+        assert "TRANSACTION_SERIALIZATION_FAILURE" in mapped
         assert (await manager.ping())["status"] == "ok"
     finally:
         await manager.close()

@@ -46,3 +46,8 @@
 - 改变幂等或事务语义；
 - 引入新 Adapter 或改变作用域隔离方案；
 - 改变审计失败时的 fail-open/fail-closed 策略。
+
+## ADR 索引
+
+- `ADR-0002-control-target-migration-separation.md`：Control / Target migration 拆分。
+- `adr/ADR-0003-audit-outbox-and-idempotency-recovery.md`：Audit Outbox 与 Idempotency Recovery。

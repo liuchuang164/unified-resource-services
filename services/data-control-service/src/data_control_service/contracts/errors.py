@@ -60,6 +60,12 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
     "IDEMPOTENCY_KEY_CONFLICT": ErrorSpec(
         409, False, ErrorCategory.IDEMPOTENCY, "idempotency key conflicts with a different request"
     ),
+    "IDEMPOTENCY_RECOVERY_REQUIRED": ErrorSpec(
+        409,
+        False,
+        ErrorCategory.IDEMPOTENCY,
+        "idempotent request completed business write and requires control-plane recovery",
+    ),
     "ROUTE_NOT_FOUND": ErrorSpec(422, False, ErrorCategory.ROUTING, "route was not found"),
     "ADAPTER_NOT_REGISTERED": ErrorSpec(
         500, False, ErrorCategory.ADAPTER, "adapter is not registered"
@@ -82,6 +88,12 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
     ),
     "TRANSACTION_ROLLED_BACK": ErrorSpec(
         409, True, ErrorCategory.TRANSACTION, "transaction rolled back"
+    ),
+    "TRANSACTION_DEADLOCK": ErrorSpec(
+        409, True, ErrorCategory.TRANSACTION, "transaction deadlock detected"
+    ),
+    "TRANSACTION_SERIALIZATION_FAILURE": ErrorSpec(
+        409, True, ErrorCategory.TRANSACTION, "transaction serialization failure"
     ),
     "PARTIAL_FAILURE": ErrorSpec(502, True, ErrorCategory.TRANSACTION, "batch partially failed"),
     "AUDIT_WRITE_FAILED": ErrorSpec(503, True, ErrorCategory.AUDIT, "audit write failed"),

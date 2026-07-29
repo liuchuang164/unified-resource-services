@@ -12,7 +12,7 @@ Phase 2 将控制面表与 PostgreSQL target 示例表放在同一 Alembic chain
 
 1. 新增 `alembic-control.ini`，只管理 `control_plane` schema。
 2. 新增 `alembic-target.ini`，只管理 `data_target` schema。
-3. Control revision head 为 `0004`，包含 idempotency、access audit、change audit、resource mappings、policy bindings。
+3. Phase 2.1 拆分时 control revision head 为 `0004`，包含 idempotency、access audit、change audit、resource mappings、policy bindings；后续 head 由新增 migration 和运行手册声明。
 4. Target revision head 为 `target_0001`，只包含 `platform_records` 示例业务表。
 5. 旧 `alembic.ini` 标记为 deprecated，仅指向 `migrations/legacy_phase2_combined` 作为 Phase 2 过渡参考。
 6. Readiness 分别检查 `control_plane.alembic_version` 与 `data_target.alembic_version`。

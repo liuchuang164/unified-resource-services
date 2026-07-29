@@ -4,6 +4,7 @@ from functools import lru_cache
 from fastapi import Request
 
 from data_control_service.adapters.registry import create_default_registry
+from data_control_service.application.audit_outbox_service import AuditOutboxService
 from data_control_service.application.audit_service import InMemoryAuditService
 from data_control_service.application.authorization_service import AuthorizationService
 from data_control_service.application.context_resolver import ContextResolver
@@ -23,6 +24,7 @@ from data_control_service.infrastructure.persistence.database import (
     require_database_url,
 )
 from data_control_service.infrastructure.persistence.repositories import (
+    SQLAlchemyAuditOutboxRepository,
     SQLAlchemyAuditRepository,
     SQLAlchemyIdempotencyRepository,
     SQLAlchemyPolicyRepository,
@@ -82,6 +84,7 @@ def get_data_control_service() -> DataControlService:
     settings = get_settings()
     control_database = get_control_database_manager()
     target_database = get_target_postgresql_manager()
+    audit_repository: AuditRepository | InMemoryAuditService
     if control_database is not None:
         resource_repository: ResourceMappingRepository = SQLAlchemyResourceMappingRepository(
             control_database.session_factory
@@ -93,14 +96,17 @@ def get_data_control_service() -> DataControlService:
             control_database.session_factory,
             processing_timeout_seconds=settings.idempotency_processing_timeout_seconds,
         )
-        audit_repository: AuditRepository | InMemoryAuditService = SQLAlchemyAuditRepository(
-            control_database.session_factory
+        audit_repository = SQLAlchemyAuditRepository(control_database.session_factory)
+        audit_outbox_repository = SQLAlchemyAuditOutboxRepository(control_database.session_factory)
+        audit_service: AuditRepository | InMemoryAuditService | AuditOutboxService = (
+            AuditOutboxService(audit_outbox_repository, settings)
         )
     else:
         resource_repository = InMemoryResourceMappingRepository(create_default_resource_registry())
         policy_repository = None
         idempotency_repository = InMemoryIdempotencyRepository()
         audit_repository = InMemoryAuditService()
+        audit_service = audit_repository
     readiness_checks: dict[str, Callable[[], Awaitable[dict[str, str]]]] = {}
     if control_database is not None:
         readiness_checks["control_database"] = control_database.ping
@@ -114,6 +120,8 @@ def get_data_control_service() -> DataControlService:
             readiness_checks["policy_provider"] = policy_repository.health
         if isinstance(audit_repository, SQLAlchemyAuditRepository):
             readiness_checks["audit_repository"] = audit_repository.health
+        if control_database is not None:
+            readiness_checks["audit_outbox_repository"] = audit_outbox_repository.health
     if target_database is not None:
         readiness_checks["postgresql_adapter_database"] = target_database.ping
         readiness_checks["target_migration"] = lambda: target_database.migration_current(
@@ -130,7 +138,7 @@ def get_data_control_service() -> DataControlService:
             settings,
             target_database.session_factory if target_database is not None else None,
         ),
-        audit_service=audit_repository,
+        audit_service=audit_service,
         readiness_checks=readiness_checks,
     )
 

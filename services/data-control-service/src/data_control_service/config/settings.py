@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     auth_provider: str = "development"
     control_database_url: str | None = None
     control_database_migration_url: str | None = None
-    control_migration_head_revision: str = "0004"
+    control_migration_head_revision: str = "0005"
     postgresql_adapter_enabled: bool = False
     postgresql_adapter_required: bool = True
     postgresql_adapter_database_url: str | None = None
@@ -22,9 +22,13 @@ class Settings(BaseSettings):
     database_statement_timeout_ms: int = Field(default=5000, ge=100)
     database_connect_timeout_seconds: int = Field(default=10, ge=1)
     idempotency_processing_timeout_seconds: int = Field(default=120, ge=1)
+    idempotency_recovery_max_attempts: int = Field(default=3, ge=1, le=10)
     audit_enabled: bool = True
     audit_fail_closed_for_writes: bool = True
     audit_payload_max_bytes: int = Field(default=4096, ge=128)
+    audit_outbox_batch_size: int = Field(default=100, ge=1, le=1000)
+    audit_outbox_max_attempts: int = Field(default=10, ge=1, le=100)
+    audit_outbox_lock_timeout_seconds: int = Field(default=300, ge=1)
     contract_version: str = "1.0"
     default_timeout_ms: int = Field(default=5000, ge=100, le=60_000)
     max_timeout_ms: int = Field(default=10_000, ge=100, le=60_000)

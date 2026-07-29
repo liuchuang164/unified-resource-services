@@ -41,6 +41,7 @@ markers = [
   "migration: exercises Alembic migrations",
   "performance: records development-only baseline timings",
   "reliability: exercises real PostgreSQL reliability behavior",
+  "consistency: exercises outbox and idempotency recovery consistency behavior",
 ]
 
 [tool.ruff]

@@ -48,7 +48,12 @@ class SQLAlchemyIdempotencyRepository(IdempotencyRepository):
                 request_fingerprint=request_fingerprint,
                 status=IdempotencyStatus.PROCESSING.value,
                 response_snapshot=None,
+                business_result_reference=None,
                 error_code=None,
+                recovery_strategy=None,
+                recovery_attempts=0,
+                max_recovery_attempts=3,
+                recovery_metadata=None,
                 owner_token=owner_token,
                 created_at=now,
                 updated_at=now,
@@ -81,6 +86,12 @@ class SQLAlchemyIdempotencyRepository(IdempotencyRepository):
                         IdempotencyClaimState.REPLAY_SUCCEEDED,
                         existing.id,
                         response_snapshot=existing.response_snapshot,
+                    )
+                if existing.status == IdempotencyStatus.RECOVERY_REQUIRED.value:
+                    return IdempotencyClaimResult(
+                        IdempotencyClaimState.RECOVERY_REQUIRED,
+                        existing.id,
+                        error_code=existing.error_code,
                     )
                 if existing.status == IdempotencyStatus.PROCESSING.value:
                     age = (now - existing.processing_started_at).total_seconds()
@@ -123,7 +134,10 @@ class SQLAlchemyIdempotencyRepository(IdempotencyRepository):
                     return
                 record.status = IdempotencyStatus.SUCCEEDED.value
                 record.response_snapshot = response_snapshot
+                record.business_result_reference = None
                 record.error_code = None
+                record.recovery_strategy = None
+                record.recovery_error_code = None
                 record.updated_at = now
                 record.completed_at = now
 
@@ -142,6 +156,104 @@ class SQLAlchemyIdempotencyRepository(IdempotencyRepository):
                 record.error_code = error_code
                 record.updated_at = now
                 record.completed_at = now
+
+    async def mark_recovery_required(
+        self,
+        record_id: str,
+        owner_token: str,
+        *,
+        business_result_reference: dict[str, object],
+        recovery_strategy: str,
+        recovery_metadata: dict[str, object],
+        error_code: str,
+        max_recovery_attempts: int,
+    ) -> None:
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            async with session.begin():
+                record = await session.get(IdempotencyRecordModel, record_id, with_for_update=True)
+                if record is None or record.owner_token != owner_token:
+                    return
+                if record.status == IdempotencyStatus.SUCCEEDED.value:
+                    return
+                record.status = IdempotencyStatus.RECOVERY_REQUIRED.value
+                record.business_result_reference = business_result_reference
+                record.recovery_strategy = recovery_strategy
+                record.recovery_metadata = recovery_metadata
+                record.error_code = error_code
+                record.recovery_error_code = None
+                record.recovery_attempts = 0
+                record.max_recovery_attempts = max_recovery_attempts
+                record.updated_at = now
+                record.completed_at = None
+
+    async def mark_recovery_succeeded(
+        self,
+        record_id: str,
+        response_snapshot: dict[str, object],
+        *,
+        recovery_metadata: dict[str, object],
+    ) -> None:
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            async with session.begin():
+                record = await session.get(IdempotencyRecordModel, record_id, with_for_update=True)
+                if record is None or record.status != IdempotencyStatus.RECOVERY_REQUIRED.value:
+                    return
+                record.status = IdempotencyStatus.SUCCEEDED.value
+                record.response_snapshot = response_snapshot
+                record.error_code = None
+                record.recovery_error_code = None
+                record.recovery_metadata = recovery_metadata
+                record.last_recovery_at = now
+                record.updated_at = now
+                record.completed_at = now
+
+    async def mark_recovery_failed(
+        self,
+        record_id: str,
+        *,
+        error_code: str,
+        recovery_metadata: dict[str, object],
+    ) -> None:
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            async with session.begin():
+                record = await session.get(IdempotencyRecordModel, record_id, with_for_update=True)
+                if record is None or record.status != IdempotencyStatus.RECOVERY_REQUIRED.value:
+                    return
+                record.recovery_attempts += 1
+                record.recovery_error_code = error_code
+                record.recovery_metadata = recovery_metadata
+                record.last_recovery_at = now
+                record.updated_at = now
+
+    async def list_recovery_required(self, limit: int) -> list[dict[str, object]]:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(IdempotencyRecordModel)
+                .where(IdempotencyRecordModel.status == IdempotencyStatus.RECOVERY_REQUIRED.value)
+                .order_by(IdempotencyRecordModel.updated_at)
+                .limit(limit)
+            )
+            return [
+                {
+                    "id": record.id,
+                    "tenant_id": record.tenant_id,
+                    "biz_domain": record.biz_domain,
+                    "operation": record.operation,
+                    "target": record.target,
+                    "idempotency_key": record.idempotency_key,
+                    "business_result_reference": record.business_result_reference,
+                    "recovery_strategy": record.recovery_strategy,
+                    "recovery_attempts": record.recovery_attempts,
+                    "max_recovery_attempts": record.max_recovery_attempts,
+                    "error_code": record.error_code,
+                    "recovery_error_code": record.recovery_error_code,
+                    "updated_at": record.updated_at.isoformat(),
+                }
+                for record in result.scalars().all()
+            ]
 
     async def health(self) -> dict[str, str]:
         async with self._session_factory() as session:

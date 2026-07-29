@@ -25,10 +25,14 @@ class PostgreSQLErrorMapper:
             if sqlstate in {"40001", "40P01"}:
                 if sqlstate == "40001":
                     metrics_registry.increment("postgresql_serialization_failure_total")
+                    metrics_registry.increment("transaction_serialization_failure_total")
+                    error_code = "TRANSACTION_SERIALIZATION_FAILURE"
                 else:
                     metrics_registry.increment("postgresql_deadlock_total")
+                    metrics_registry.increment("transaction_deadlock_total")
+                    error_code = "TRANSACTION_DEADLOCK"
                 metrics_registry.increment("postgresql_transaction_rollback_total")
-                return DataControlError("TRANSACTION_ROLLED_BACK")
+                return DataControlError(error_code)
             return DataControlError("DATA_CONSTRAINT_VIOLATION")
         sqlstate = PostgreSQLErrorMapper._sqlstate(exc)
         if sqlstate in {"57014"}:
@@ -40,10 +44,14 @@ class PostgreSQLErrorMapper:
         if sqlstate in {"40001", "40P01"}:
             if sqlstate == "40001":
                 metrics_registry.increment("postgresql_serialization_failure_total")
+                metrics_registry.increment("transaction_serialization_failure_total")
+                error_code = "TRANSACTION_SERIALIZATION_FAILURE"
             else:
                 metrics_registry.increment("postgresql_deadlock_total")
+                metrics_registry.increment("transaction_deadlock_total")
+                error_code = "TRANSACTION_DEADLOCK"
             metrics_registry.increment("postgresql_transaction_rollback_total")
-            return DataControlError("TRANSACTION_ROLLED_BACK")
+            return DataControlError(error_code)
         return DataControlError("INTERNAL_ERROR")
 
     @staticmethod

@@ -20,7 +20,7 @@ alembic -c alembic-target.ini upgrade head
 
 期望 head：
 
-- control：`0004`
+- control：`0005`
 - target：`target_0001`
 
 旧 Phase 2 环境使用 `scripts/stamp_split_migrations.py` 过渡，禁止直接删库。
@@ -67,19 +67,49 @@ DATABASE_POOL_TIMEOUT_SECONDS=30
 
 ## Deadlock / Serialization Failure
 
-错误应映射为 `TRANSACTION_ROLLED_BACK`，调用方只有在复用同一 `idempotency_key` 时才能重试写操作。服务不做无限自动重试。
+Deadlock 应映射为 `TRANSACTION_DEADLOCK`，serialization failure 应映射为 `TRANSACTION_SERIALIZATION_FAILURE`。两者 `retryable=true`，调用方只有在复用同一 `idempotency_key` 时才能重试写操作。服务不做无限自动重试。
 
 ## Idempotency PROCESSING 超时
 
-`SQLAlchemyIdempotencyRepository` 会按 `IDEMPOTENCY_PROCESSING_TIMEOUT_SECONDS` reclaim 超时 PROCESSING。若业务已成功但 completion 失败，当前不自动猜测任意业务结果，需人工诊断或后续 recovery/outbox 扩展。
+`SQLAlchemyIdempotencyRepository` 会按 `IDEMPOTENCY_PROCESSING_TIMEOUT_SECONDS` reclaim 超时 PROCESSING。
+
+如果业务写已成功但 `mark_succeeded` 失败，记录进入 `RECOVERY_REQUIRED`。相同 key 后续请求返回 `IDEMPOTENCY_RECOVERY_REQUIRED`，不会重新执行目标 Adapter。
+
+管理员诊断：
+
+```bash
+python scripts/recover_idempotency.py --limit 50 --dry-run
+```
+
+确认目标库事实后恢复：
+
+```bash
+python scripts/recover_idempotency.py --limit 50
+```
 
 ## Audit
 
-写操作默认 `AUDIT_FAIL_CLOSED_FOR_WRITES=true`。跨 control/target database 时，不声称审计与业务写入强一致。本阶段尚未实现 audit outbox，审计失败需按事件告警和人工补偿流程处理。
+跨 control/target database 时，不声称审计与业务写入强一致。写操作成功后会写入 `control_plane.audit_outbox`，由显式 processor 将事件物化到正式审计表。
+
+处理 pending outbox：
+
+```bash
+python scripts/process_audit_outbox.py --batch-size 100
+```
+
+如果 outbox health 中 failed 大于 0，先保留现场，检查 control database 可用性、migration head 和最近错误摘要。不得人工删除 outbox 事件来掩盖审计缺失。
 
 ## 服务重启和 PostgreSQL 重启
 
 优雅关闭会 dispose control/target engine。PostgreSQL 重启后，不要求服务重启；readiness 应从 `NOT_READY` 自动恢复。
+
+专用 stop/start 自动化只允许使用：
+
+```bash
+docker compose -f docker-compose.reliability.yml up -d
+POSTGRESQL_RELIABILITY_COMPOSE=1 pytest tests/reliability/postgresql/test_stop_start.py -q
+docker compose -f docker-compose.reliability.yml down -v
+```
 
 ## 禁止操作
 

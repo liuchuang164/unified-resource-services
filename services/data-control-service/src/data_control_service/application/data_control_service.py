@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable
 from time import perf_counter
 
 from data_control_service.adapters.registry import AdapterRegistry
+from data_control_service.application.audit_outbox_service import AuditOutboxService
 from data_control_service.application.audit_service import InMemoryAuditService
 from data_control_service.application.authorization_service import AuthorizationService
 from data_control_service.application.context_resolver import ContextResolver
@@ -32,7 +33,7 @@ class DataControlService:
         routing_service: RoutingService,
         transaction_orchestrator: TransactionOrchestrator,
         adapter_registry: AdapterRegistry,
-        audit_service: AuditRepository | InMemoryAuditService,
+        audit_service: AuditRepository | InMemoryAuditService | AuditOutboxService,
         readiness_checks: dict[str, Callable[[], Awaitable[dict[str, str]]]] | None = None,
     ) -> None:
         self._context_resolver = context_resolver
@@ -110,7 +111,32 @@ class DataControlService:
                     "idempotency_replayed": False,
                 },
             )
-            await self._idempotency_service.succeed(idempotency_record_id, request, response)
+            try:
+                await self._idempotency_service.succeed(idempotency_record_id, request, response)
+            except Exception as exc:
+                recovery_reference = self._business_result_reference(
+                    request, context, route, result
+                )
+                await self._idempotency_service.recovery_required(
+                    idempotency_record_id,
+                    request,
+                    business_result_reference=recovery_reference,
+                    recovery_strategy="postgresql_result_reference_replay",
+                    recovery_metadata={
+                        "response_snapshot": response.model_dump(mode="json"),
+                        "failure_type": type(exc).__name__,
+                    },
+                    error_code="IDEMPOTENCY_RECOVERY_REQUIRED",
+                )
+                await self._record_access(
+                    request,
+                    context,
+                    status="FAILED",
+                    code="IDEMPOTENCY_RECOVERY_REQUIRED",
+                    latency_ms=duration_ms,
+                    route=route,
+                )
+                raise DataControlError("IDEMPOTENCY_RECOVERY_REQUIRED") from exc
             await self._record_change(
                 request, context, result, status="SUCCEEDED", code="OK", route=route
             )
@@ -162,6 +188,30 @@ class DataControlService:
             await self._audit_service.record_change(
                 request, context, result, status=status, code=code, route=route
             )
+
+    @staticmethod
+    def _business_result_reference(
+        request: DataRequest,
+        context: ExecutionContext,
+        route: RouteDecision,
+        result: AdapterResult,
+    ) -> dict[str, object]:
+        data = result.data if isinstance(result.data, dict) else {}
+        external_id = data.get("external_id") or request.payload.data.get("external_id")
+        resource_id = data.get("resource_id") or request.resource.resource_id
+        return {
+            "tenant_id": context.tenant_id,
+            "biz_domain": context.biz_domain,
+            "operation": request.operation.value,
+            "target": route.target.value,
+            "logical_resource": route.logical_resource,
+            "logical_resource_type": request.resource.type,
+            "logical_resource_name": request.resource.name,
+            "resource_id": resource_id,
+            "external_id": external_id,
+            "resource_version": result.resource_version,
+            "affected_count": result.affected_count,
+        }
 
     async def readiness(self) -> dict[str, object]:
         registry_validation = await self._adapter_registry.validate()

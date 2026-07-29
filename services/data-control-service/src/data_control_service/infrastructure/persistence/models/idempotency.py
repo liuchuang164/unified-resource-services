@@ -34,7 +34,18 @@ class IdempotencyRecordModel(Base):
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     response_snapshot: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    business_result_reference: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB, nullable=True
+    )
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recovery_strategy: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recovery_attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    max_recovery_attempts: Mapped[int] = mapped_column(nullable=False, default=3)
+    last_recovery_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    recovery_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recovery_metadata: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     owner_token: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

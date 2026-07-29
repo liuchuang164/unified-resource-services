@@ -56,6 +56,7 @@
 | `IDEMPOTENCY_KEY_REQUIRED` | 400 | 否 | 写操作缺少幂等 Key。 |
 | `IDEMPOTENCY_IN_PROGRESS` | 409 | 是 | 同 Key 请求仍在执行。 |
 | `IDEMPOTENCY_KEY_CONFLICT` | 409 | 否 | 同 Key 对应不同请求摘要。 |
+| `IDEMPOTENCY_RECOVERY_REQUIRED` | 409 | 否 | 业务写已成功但幂等完成记录需要管理员恢复，重试不会重新写目标库。 |
 | `RESOURCE_VERSION_CONFLICT` | 409 | 是 | 乐观锁版本冲突。 |
 | `LOCK_CONFLICT` | 409 | 是 | 锁被其他执行持有。 |
 
@@ -79,6 +80,8 @@
 | `DATA_CONSTRAINT_VIOLATION` | 422 | 否 | 唯一性、引用或字段约束失败。 |
 | `TRANSACTION_NOT_SUPPORTED` | 422 | 否 | 请求的事务语义无法满足。 |
 | `TRANSACTION_ROLLED_BACK` | 409 | 是 | 事务因并发或暂时错误回滚。 |
+| `TRANSACTION_DEADLOCK` | 409 | 是 | PostgreSQL deadlock，事务已回滚。 |
+| `TRANSACTION_SERIALIZATION_FAILURE` | 409 | 是 | PostgreSQL serialization failure，事务已回滚。 |
 | `PARTIAL_FAILURE` | 200/502 | 视逐项结果 | BEST_EFFORT 批次存在失败。 |
 
 ### 3.6 Audit / Internal

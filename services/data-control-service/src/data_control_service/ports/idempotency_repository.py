@@ -10,6 +10,7 @@ class IdempotencyStatus(StrEnum):
     PROCESSING = "PROCESSING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
 
 
 class IdempotencyClaimState(StrEnum):
@@ -18,6 +19,7 @@ class IdempotencyClaimState(StrEnum):
     IN_PROGRESS = "IN_PROGRESS"
     FINGERPRINT_CONFLICT = "FINGERPRINT_CONFLICT"
     RETRY_FAILED = "RETRY_FAILED"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
 
 
 @dataclass(frozen=True)
@@ -54,5 +56,35 @@ class IdempotencyRepository(Protocol):
     ) -> None: ...
 
     async def mark_failed(self, record_id: str, owner_token: str, error_code: str) -> None: ...
+
+    async def mark_recovery_required(
+        self,
+        record_id: str,
+        owner_token: str,
+        *,
+        business_result_reference: dict[str, object],
+        recovery_strategy: str,
+        recovery_metadata: dict[str, object],
+        error_code: str,
+        max_recovery_attempts: int,
+    ) -> None: ...
+
+    async def mark_recovery_succeeded(
+        self,
+        record_id: str,
+        response_snapshot: dict[str, object],
+        *,
+        recovery_metadata: dict[str, object],
+    ) -> None: ...
+
+    async def mark_recovery_failed(
+        self,
+        record_id: str,
+        *,
+        error_code: str,
+        recovery_metadata: dict[str, object],
+    ) -> None: ...
+
+    async def list_recovery_required(self, limit: int) -> list[dict[str, object]]: ...
 
     async def health(self) -> dict[str, str]: ...
