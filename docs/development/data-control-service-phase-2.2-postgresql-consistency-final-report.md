@@ -125,7 +125,12 @@ pytest -m performance -q: 1 skipped
 - Commit `7849dc5`：隔离 audit outbox consistency 测试，不再假设共享 CI 数据库为空。
 - Commit `4e7bada`：隔离 idempotency recovery consistency 测试的应用缓存，避免前序真实 PostgreSQL 环境污染。
 
-当前分支 HEAD 为 `4e7bada`，本地 Python 3.12 对该 HEAD 的 `pytest -m consistency -q` 已通过。GitHub 对最新 HEAD 的最终 run URL 和结论需以 Actions 新触发结果为准。
+最终 GitHub Actions：
+
+- Run `30455808374`（commit `6690aaa`）：通过。
+- URL: `https://github.com/liuchuang164/unified-resource-services/actions/runs/30455808374`
+- `quality` job：migration、lint、format、mypy、unit、PostgreSQL integration、PostgreSQL reliability、PostgreSQL consistency、migration marker、performance smoke、coverage、secret scan 全部通过。
+- `postgresql-stop-start` job：专用 PostgreSQL control/target compose、migration、bootstrap、stop/start reliability test、cleanup 全部通过。
 
 ## 12. 风险声明
 
