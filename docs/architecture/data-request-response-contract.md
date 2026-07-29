@@ -16,18 +16,19 @@
   "trace_id": "trace_01J...",
   "source": "BUSINESS_SERVICE",
   "auth_context": {
-    "subject_id": "user_123",
-    "subject_type": "USER",
     "tenant_id": "tenant_001",
-    "biz_domain": "litigation",
-    "roles": ["CASE_OPERATOR"]
+    "biz_domain": "demo",
+    "actor": {
+      "subject_id": "svc_demo",
+      "subject_type": "SERVICE"
+    }
   },
   "operation": "CREATE",
   "resource": {
     "target": "POSTGRESQL",
-    "type": "CASE_RECORD",
-    "name": "case",
-    "resource_id": "CASE202607290001"
+    "type": "DOCUMENT_RECORD",
+    "name": "record",
+    "resource_id": "doc_202607290001"
   },
   "payload": {
     "data": {},
@@ -54,7 +55,7 @@
 | `request_id` | 是 | 调用方请求唯一标识；服务端校验格式与长度。 |
 | `trace_id` | 否 | 未提供时由服务端生成。 |
 | `source` | 是 | `BUSINESS_SERVICE`、`ONTOLOGY_SERVICE`、`DATA_ACCESS_GATEWAY`、`INTERNAL_JOB`。 |
-| `auth_context` | 是 | 调用声明；最终可信上下文必须由服务端鉴权结果确认。 |
+| `auth_context` | 是 | 请求期望作用域；只允许声明 tenant、biz_domain、actor，最终可信权限来自服务端鉴权结果。 |
 | `operation` | 是 | 标准操作枚举。 |
 | `resource` | 是 | 逻辑资源描述，不允许物理连接信息。 |
 | `payload` | 是 | 操作数据、查询和选项。 |
