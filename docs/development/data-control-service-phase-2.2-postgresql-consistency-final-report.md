@@ -115,7 +115,17 @@ pytest -m performance -q: 1 skipped
 
 ## 11. GitHub Actions
 
-待推送后回填最终 run URL 和结论。
+已验证的 GitHub Actions 记录：
+
+- Run `30453521602`（commit `5eb0fd8`）：失败，暴露 quality consistency 与 stop/start 等待问题。
+- Run `30453861258`（commit `63fe5e6`）：`postgresql-stop-start` 通过，`quality` 仍在 `PostgreSQL consistency tests` 失败。
+
+后续修复：
+
+- Commit `7849dc5`：隔离 audit outbox consistency 测试，不再假设共享 CI 数据库为空。
+- Commit `4e7bada`：隔离 idempotency recovery consistency 测试的应用缓存，避免前序真实 PostgreSQL 环境污染。
+
+当前分支 HEAD 为 `4e7bada`，本地 Python 3.12 对该 HEAD 的 `pytest -m consistency -q` 已通过。GitHub 对最新 HEAD 的最终 run URL 和结论需以 Actions 新触发结果为准。
 
 ## 12. 风险声明
 
