@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import secrets
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -149,8 +149,7 @@ class RedisReplayProtector:
         if not context.nonce:
             return
         key = "fms:replay:" + ":".join(
-            _digest(value)
-            for value in (context.tenant_id, context.biz_domain, context.nonce)
+            _digest(value) for value in (context.tenant_id, context.biz_domain, context.nonce)
         )
         if not await self.client.set(key, "1", nx=True, ex=self.ttl_seconds):
             raise ReplayDetected("Request nonce has already been used")
@@ -185,10 +184,12 @@ class RedisCoordinatedIdempotencyStore:
         delegate: IdempotencyStore,
         *,
         wait_timeout_seconds: float = 5,
+        on_durable_complete: Callable[[], None] | None = None,
     ) -> None:
         self.coordination = coordination
         self.delegate = delegate
         self.wait_timeout_seconds = wait_timeout_seconds
+        self.on_durable_complete = on_durable_complete
         self._leases: dict[tuple[str, ...], Lease] = {}
 
     async def reserve(
@@ -220,6 +221,8 @@ class RedisCoordinatedIdempotencyStore:
         self, scope: tuple[str, ...], request_hash: str, result: dict[str, Any]
     ) -> None:
         await self.delegate.complete(scope, request_hash, result)
+        if self.on_durable_complete is not None:
+            self.on_durable_complete()
         await self._release(scope)
 
     async def fail(self, scope: tuple[str, ...]) -> None:

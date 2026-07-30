@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -16,6 +17,8 @@ from file_media_stream_service.config import Settings
 from file_media_stream_service.gateway.registry import ToolNotExecutable
 from file_media_stream_service.observability import configure_logging
 
+logger = logging.getLogger(__name__)
+
 
 def create_app(
     container: Container | ProductionContainer | None = None,
@@ -33,12 +36,22 @@ def create_app(
     ) -> Response:
         if not isinstance(container, ProductionContainer):
             return await call_next(request)
+        if container.provisioning_compensator is not None:
+            container.provisioning_compensator.begin()
         try:
             response = await call_next(request)
             await container.transaction.commit()
+            if container.provisioning_compensator is not None:
+                container.provisioning_compensator.clear()
             return response
         except Exception:
             await container.transaction.rollback()
+            await container.transaction.close()
+            if container.provisioning_compensator is not None:
+                try:
+                    await container.provisioning_compensator.compensate()
+                except Exception:
+                    logger.exception("stream provisioning compensation failed")
             return JSONResponse(
                 status_code=503,
                 content={"status": "unavailable", "error": "transaction_failed"},
