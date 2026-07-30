@@ -1,7 +1,8 @@
 # 文件/音视频流式服务
 
-Phase 1 keeps the frozen control-plane contract and adds production PostgreSQL, Redis, and MinIO
-adapters. InMemory/Fake adapters remain available only for tests and explicit local development.
+Phase 2 keeps the frozen control-plane contract, retains the Phase 1 PostgreSQL/Redis/MinIO
+adapters, and adds a vendor-neutral media data-plane control layer. InMemory/Fake adapters remain
+available only for tests and explicit local development.
 
 ## Run locally
 
@@ -40,6 +41,10 @@ Production startup fails fast when PostgreSQL, Redis, or MinIO configuration is 
 falls back to InMemory/Fake adapters. `/health` reports process liveness only; `/ready` checks all
 three production dependencies and exposes only `ok` or `unavailable`.
 
+The optional production media provider uses `MEDIA_PROVIDER_BASE_URL`,
+`MEDIA_PROVIDER_API_TOKEN`, and `MEDIA_PROVIDER_TIMEOUT_SECONDS`. When it is not configured, stream
+operations fail closed; file operations and infrastructure readiness remain available.
+
 Migration verification:
 
 ```bash
@@ -57,8 +62,8 @@ Migration verification:
 - `GET /api/v1/tools/{tool_name}/schema`
 - `POST /api/v1/tools/execute`
 
-Media frames and file bytes never traverse these JSON endpoints. Phase 1 does not add a media
-server, processor pipeline, OCR, ASR, or transcoding.
+Media frames and file bytes never traverse these JSON endpoints. Phase 2 adds provider lifecycle
+orchestration only; it does not embed a media server, processor pipeline, OCR, ASR, or transcoding.
 
 ## Quality gates
 
