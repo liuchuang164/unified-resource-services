@@ -4,6 +4,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from file_media_stream_service.bootstrap import Container
+from file_media_stream_service.security import AuthorizationRule
 
 
 def unified(operation: str, context: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -86,6 +87,73 @@ def test_unauthorized_operation_denied_and_audited(
     assert response["error"]["code"] == "PERMISSION_DENIED"
     assert container.audit.events[-1].decision == "DENY"
     assert container.audit.events[-1].error_code == "PERMISSION_DENIED"
+
+
+def test_stream_operation_maps_to_required_actions(
+    client: TestClient,
+    container: Container,
+    service_context: Callable[..., dict[str, Any]],
+) -> None:
+    allowed = client.post(
+        "/api/v1/operations/execute",
+        json=unified(
+            "media.create_stream_session",
+            service_context(idempotency_key="stream-action-allow"),
+            {"protocol": "WEBRTC", "direction": "INGRESS"},
+        ),
+    ).json()
+    assert allowed["success"] is True
+
+    container.security.rules = (
+        AuthorizationRule(
+            "dev-service",
+            "dev-tenant",
+            "development",
+            "media_stream:create",
+            allowed=True,
+        ),
+    )
+    missing_action = client.post(
+        "/api/v1/operations/execute",
+        json=unified(
+            "media.create_stream_session",
+            service_context(
+                request_id="stream-action-missing",
+                idempotency_key="stream-action-missing",
+            ),
+            {"protocol": "WEBRTC", "direction": "INGRESS"},
+        ),
+    ).json()
+    assert missing_action["error"]["code"] == "PERMISSION_DENIED"
+
+    denied_operation = client.post(
+        "/api/v1/operations/execute",
+        json=unified(
+            "media.close_stream_session",
+            service_context(request_id="stream-close-denied"),
+            {"session_id": "missing"},
+        ),
+    ).json()
+    assert denied_operation["error"]["code"] == "PERMISSION_DENIED"
+
+    container.security.rules = (
+        AuthorizationRule(
+            "dev-service",
+            "other-tenant",
+            "development",
+            "media_stream:close",
+            allowed=True,
+        ),
+    )
+    tenant_mismatch = client.post(
+        "/api/v1/operations/execute",
+        json=unified(
+            "media.close_stream_session",
+            service_context(request_id="stream-tenant-mismatch"),
+            {"session_id": "missing"},
+        ),
+    ).json()
+    assert tenant_mismatch["error"]["code"] == "PERMISSION_DENIED"
 
 
 def test_agent_requires_valid_capability_token(

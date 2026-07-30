@@ -10,6 +10,7 @@ from file_media_stream_service.adapters.persistence.postgres import (
     PostgresAuditSink,
     PostgresFileRepository,
     PostgresIdempotencyStore,
+    PostgresIndependentReconciliationStore,
     PostgresProcessingJobRepository,
     PostgresReconciliationStore,
     PostgresStreamEventSink,
@@ -153,6 +154,56 @@ async def test_repository_scope_rollback_unique_audit_and_reconciliation() -> No
     finally:
         await sessions.remove()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_primary_session_uses_isolated_reconciliation_transaction() -> None:
+    engine = create_engine(DATABASE_URL, 2, 1, 3)
+    sessions = create_session_registry(engine)
+    key = "stream-provider-orphan:failed-primary"
+    isolated = PostgresIndependentReconciliationStore(engine)
+    try:
+        await sessions().execute(
+            ReconciliationRecordRow.__table__.delete().where(ReconciliationRecordRow.key == key)
+        )
+        await sessions().commit()
+        await files_with_duplicate_failure(sessions)
+        assert not sessions().is_active
+        await isolated.record(
+            key,
+            "STREAM_PROVIDER_ORPHAN",
+            {
+                "tenant_id": "tenant-a",
+                "biz_domain": "legal",
+                "session_id": "failed-primary",
+                "provider_type": "fake",
+                "provider_session_id": "provider-failed-primary",
+                "fencing_token": 11,
+                "required_action": "STOP_PROVIDER_STREAM",
+            },
+        )
+        await sessions().rollback()
+        await sessions.remove()
+        assert (
+            await sessions().scalar(
+                select(func.count())
+                .select_from(ReconciliationRecordRow)
+                .where(ReconciliationRecordRow.key == key)
+            )
+            == 1
+        )
+    finally:
+        await sessions().rollback()
+        await sessions.remove()
+        await engine.dispose()
+
+
+async def files_with_duplicate_failure(sessions: object) -> None:
+    repository = PostgresFileRepository(sessions)  # type: ignore[arg-type]
+    await repository.add(resource("res_pg_isolation"))
+    await sessions().commit()  # type: ignore[attr-defined]
+    with pytest.raises(IntegrityError):
+        await repository.add(resource("res_pg_isolation"))
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -20,6 +21,7 @@ from file_media_stream_service.domain.enums import (
     StreamEventType,
     StreamSessionStatus,
 )
+from file_media_stream_service.workers import StreamLifecycleWorker
 
 
 def context() -> RequestContext:
@@ -160,17 +162,160 @@ async def test_provider_failure_persists_failed_session_and_reconciliation(
 async def test_provider_success_then_database_failure_is_compensated(
     container: Container,
 ) -> None:
-    async def fail_add(session: object) -> None:
+    async def fail_save(session: object) -> None:
+        raise RuntimeError("ready update failed")
+
+    container.entry.use_cases.sessions.save = fail_save  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="ready update failed"):
+        await container.entry.use_cases.create_stream_session(
+            context(), {"protocol": "WEBRTC", "direction": "INGRESS"}
+        )
+    stored = next(iter(container.state.sessions.values()))
+    key = f"stream-provider-orphan:{stored.session_id}"
+    assert any(
+        record_key == key
+        and kind == "STREAM_PROVIDER_ORPHAN"
+        and payload["required_action"] == "STOP_PROVIDER_STREAM"
+        for record_key, kind, payload in container.reconciliation.recorded
+    )
+    assert container.media_provider.sessions == {}
+    assert container.stream_coordination.leases == {}
+    assert container.reconciliation.pending == {}
+
+
+@pytest.mark.asyncio
+async def test_database_and_reconciliation_failure_still_stops_provider(
+    container: Container,
+) -> None:
+    async def fail_save(session: object) -> None:
         raise RuntimeError("database unavailable")
 
-    container.entry.use_cases.sessions.add = fail_add  # type: ignore[method-assign]
+    async def fail_reconciliation(key: str, kind: str, payload: object) -> None:
+        raise RuntimeError("reconciliation database unavailable")
+
+    container.entry.use_cases.sessions.save = fail_save  # type: ignore[method-assign]
+    container.reconciliation.record = fail_reconciliation  # type: ignore[method-assign]
     with pytest.raises(RuntimeError, match="database unavailable"):
         await container.entry.use_cases.create_stream_session(
             context(), {"protocol": "WEBRTC", "direction": "INGRESS"}
         )
     assert container.media_provider.sessions == {}
     assert container.stream_coordination.leases == {}
-    assert container.reconciliation.pending == {}
+
+
+@pytest.mark.asyncio
+async def test_worker_recovers_lease_after_service_restart(container: Container) -> None:
+    created = await container.entry.use_cases.create_stream_session(
+        context(), {"protocol": "WEBRTC", "direction": "INGRESS"}
+    )
+    session_id = str(created["session"]["session_id"])
+    old_lease = next(iter(container.stream_coordination.leases.values()))
+    assert await container.stream_coordination.release_stream(old_lease)
+    lifecycle = StreamLifecycleService(
+        InMemoryStreamSessionRepository(container.state),
+        container.media_provider,
+        container.stream_coordination,
+        container.stream_events,
+        container.reconciliation,
+        SystemClock(),
+        UuidIdentifierFactory(),
+    )
+    worker = StreamLifecycleWorker(lifecycle, interval_seconds=60)
+    await worker.run_once()
+    recovered = await InMemoryStreamSessionRepository(container.state).get_by_scope_and_id(
+        "tenant-phase2", "legal", session_id
+    )
+    assert recovered is not None
+    assert recovered.fencing_token > old_lease.fencing_token
+    assert recovered.status is StreamSessionStatus.READY
+    await worker.start()
+    await worker.start()
+    await worker.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_worker_retries_after_transient_cycle_failure() -> None:
+    class TransientLifecycle:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def reconcile_all(self) -> list[object]:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary provider failure")
+            return []
+
+    lifecycle = TransientLifecycle()
+    worker = StreamLifecycleWorker(lifecycle, interval_seconds=0.001)  # type: ignore[arg-type]
+    await worker.start()
+    await asyncio.sleep(0.02)
+    await worker.shutdown()
+    assert lifecycle.calls > 1
+
+
+@pytest.mark.asyncio
+async def test_worker_transaction_commit_and_rollback() -> None:
+    class Lifecycle:
+        fail = False
+
+        async def reconcile_all(self) -> list[object]:
+            if self.fail:
+                raise RuntimeError("cycle failed")
+            return []
+
+    class Transactions:
+        committed = 0
+        rolled_back = 0
+        closed = 0
+
+        async def commit(self) -> None:
+            self.committed += 1
+
+        async def rollback(self) -> None:
+            self.rolled_back += 1
+
+        async def close(self) -> None:
+            self.closed += 1
+
+    lifecycle = Lifecycle()
+    transactions = Transactions()
+    worker = StreamLifecycleWorker(
+        lifecycle,
+        transactions=transactions,  # type: ignore[arg-type]
+    )
+    await worker.run_once()
+    lifecycle.fail = True
+    with pytest.raises(RuntimeError, match="cycle failed"):
+        await worker.run_once()
+    assert (transactions.committed, transactions.rolled_back, transactions.closed) == (1, 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_orphan_failure_is_isolated_for_worker(container: Container) -> None:
+    await container.reconciliation.record(
+        "stream-provider-orphan:missing",
+        "STREAM_PROVIDER_ORPHAN",
+        {
+            "tenant_id": "tenant-phase2",
+            "biz_domain": "legal",
+            "session_id": "missing",
+            "provider_type": "fake",
+            "provider_session_id": "missing-provider",
+            "fencing_token": 999,
+            "required_action": "STOP_PROVIDER_STREAM",
+        },
+    )
+    lifecycle = StreamLifecycleService(
+        InMemoryStreamSessionRepository(container.state),
+        container.media_provider,
+        container.stream_coordination,
+        container.stream_events,
+        container.reconciliation,
+        SystemClock(),
+        UuidIdentifierFactory(),
+    )
+    await lifecycle.reconcile_provider_orphans()
+    assert "stream-provider-orphan:missing" in container.reconciliation.pending
 
 
 @pytest.mark.asyncio

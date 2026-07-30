@@ -93,6 +93,39 @@ def test_postgres_commit_failure_is_generic_and_rolls_back() -> None:
     assert "credential" not in response.text
 
 
+def test_final_commit_failure_compensates_provider_and_lease() -> None:
+    local = build_container(Settings(environment="test"))
+    assert not isinstance(local, ProductionContainer)
+    container = ProductionContainer(
+        entry=local.entry,
+        gateway=local.gateway,
+        transaction=CommitFailure(),  # type: ignore[arg-type]
+        readiness=Ready(),  # type: ignore[arg-type]
+        provisioning_compensator=local.provisioning_compensator,
+    )
+    response = TestClient(create_app(container, Settings(environment="test"))).post(
+        "/api/v1/operations/execute",
+        json={
+            "api_version": "v1",
+            "operation": "media.create_stream_session",
+            "context": {
+                "request_id": "commit-failure-stream",
+                "trace_id": "commit-failure-stream",
+                "tenant_id": "dev-tenant",
+                "biz_domain": "development",
+                "caller_type": "service",
+                "caller_id": "dev-service",
+                "idempotency_key": "commit-failure-stream",
+            },
+            "payload": {"protocol": "WEBRTC", "direction": "INGRESS"},
+        },
+    )
+    assert response.status_code == 503
+    assert local.media_provider.sessions == {}
+    assert local.stream_coordination.leases == {}
+    assert any(kind == "STREAM_PROVIDER_ORPHAN" for _, kind, _ in local.reconciliation.recorded)
+
+
 @pytest.mark.asyncio
 async def test_minio_success_then_postgres_failure_is_compensated() -> None:
     state = InMemoryState()
