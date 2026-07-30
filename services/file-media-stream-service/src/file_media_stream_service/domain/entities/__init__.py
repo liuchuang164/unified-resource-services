@@ -4,6 +4,7 @@ from .models import (
     MediaResource,
     ProcessingJob,
     ResourceGrant,
+    StreamEvent,
     StreamSession,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "MediaResource",
     "ProcessingJob",
     "ResourceGrant",
+    "StreamEvent",
     "StreamSession",
 ]

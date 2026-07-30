@@ -5,6 +5,8 @@ from file_media_stream_service.domain.enums.status import (
     FileResourceStatus,
     GrantStatus,
     ProcessingJobStatus,
+    StreamConnectionState,
+    StreamEventType,
     StreamSessionStatus,
 )
 from file_media_stream_service.domain.exceptions.errors import InvalidStateTransition
@@ -150,6 +152,15 @@ class StreamSession:
     endpoint_reference: str
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    provider_type: str = "legacy"
+    stream_key: str = ""
+    input_protocol: str = ""
+    output_protocol: str = ""
+    endpoint: str = ""
+    media_server_session_id: str = ""
+    last_heartbeat_at: datetime | None = None
+    connection_state: StreamConnectionState = StreamConnectionState.DISCONNECTED
+    fencing_token: int = 0
 
     def transition_to(self, target: StreamSessionStatus) -> None:
         self.status = _transition(self.status, target, STREAM_TRANSITIONS)
@@ -171,6 +182,32 @@ class StreamSession:
             self.transition_to(StreamSessionStatus.CLOSED)
             return
         raise InvalidStateTransition(f"Cannot close session from {self.status}")
+
+    def connected(self, heartbeat_at: datetime) -> None:
+        if self.status is StreamSessionStatus.READY:
+            self.transition_to(StreamSessionStatus.ACTIVE)
+        elif self.status is not StreamSessionStatus.ACTIVE:
+            raise InvalidStateTransition(f"Cannot connect session from {self.status}")
+        self.connection_state = StreamConnectionState.CONNECTED
+        self.last_heartbeat_at = heartbeat_at
+
+    def disconnected(self, heartbeat_at: datetime) -> None:
+        if self.status not in {StreamSessionStatus.READY, StreamSessionStatus.ACTIVE}:
+            raise InvalidStateTransition(f"Cannot disconnect session from {self.status}")
+        self.connection_state = StreamConnectionState.DISCONNECTED
+        self.last_heartbeat_at = heartbeat_at
+
+
+@dataclass(frozen=True, slots=True)
+class StreamEvent:
+    event_id: str
+    tenant_id: str
+    biz_domain: str
+    session_id: str
+    event_type: StreamEventType
+    provider: str
+    timestamp: datetime
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

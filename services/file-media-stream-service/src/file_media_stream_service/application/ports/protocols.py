@@ -7,6 +7,7 @@ from file_media_stream_service.domain.entities.models import (
     AuditEvent,
     FileResource,
     ProcessingJob,
+    StreamEvent,
     StreamSession,
 )
 
@@ -25,6 +26,11 @@ class StreamSessionRepository(Protocol):
         self, tenant_id: str, biz_domain: str, session_id: str
     ) -> StreamSession | None: ...
     async def save(self, session: StreamSession) -> None: ...
+    async def list_recoverable(self, tenant_id: str, biz_domain: str) -> list[StreamSession]: ...
+
+
+class StreamEventSink(Protocol):
+    async def write_stream_event(self, event: StreamEvent) -> None: ...
 
 
 class ProcessingJobRepository(Protocol):
@@ -106,4 +112,4 @@ class EventBus(Protocol):
 
 class ReconciliationStore(Protocol):
     async def record(self, key: str, kind: str, payload: Mapping[str, Any]) -> None: ...
-    async def resolve(self, key: str) -> None: ...
+    async def resolve(self, key: str, tenant_id: str, biz_domain: str) -> None: ...

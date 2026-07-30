@@ -22,6 +22,30 @@ class StreamSessionStatus(StrEnum):
     EXPIRED = "EXPIRED"
 
 
+class StreamProtocol(StrEnum):
+    WEBRTC = "WEBRTC"
+    RTMP = "RTMP"
+    HLS = "HLS"
+    WS_AUDIO = "WS_AUDIO"
+    WS_VIDEO = "WS_VIDEO"
+    WEBSOCKET = "WEBSOCKET"
+
+
+class StreamConnectionState(StrEnum):
+    DISCONNECTED = "DISCONNECTED"
+    CONNECTING = "CONNECTING"
+    CONNECTED = "CONNECTED"
+    DEGRADED = "DEGRADED"
+
+
+class StreamEventType(StrEnum):
+    STREAM_CREATED = "STREAM_CREATED"
+    STREAM_CONNECTED = "STREAM_CONNECTED"
+    STREAM_DISCONNECTED = "STREAM_DISCONNECTED"
+    STREAM_TIMEOUT = "STREAM_TIMEOUT"
+    STREAM_RESTART_REQUIRED = "STREAM_RESTART_REQUIRED"
+
+
 class ProcessingJobStatus(StrEnum):
     PENDING = "PENDING"
     QUEUED = "QUEUED"
