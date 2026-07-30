@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from copy import deepcopy
+from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -21,7 +22,7 @@ def _minio_request(payload_data: dict[str, object]) -> dict[str, object]:
             "resource_id": None,
         },
         payload={"data": payload_data, "query": {}, "options": {}},
-        idempotency_key="idem_MINIO_SECURITY",
+        idempotency_key=f"idem_MINIO_SECURITY_{uuid4().hex}",
     )
     return req
 

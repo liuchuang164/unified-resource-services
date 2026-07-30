@@ -51,8 +51,14 @@ def request(operation: str, data: dict[str, Any], idem: str | None = None) -> di
 async def timed(
     client: AsyncClient, operation: str, data: dict[str, Any], idem: str | None = None
 ) -> tuple[bool, float, str, dict[str, Any]]:
+    return await timed_request(client, request(operation, data, idem))
+
+
+async def timed_request(
+    client: AsyncClient, payload: dict[str, Any]
+) -> tuple[bool, float, str, dict[str, Any]]:
     started = perf_counter()
-    response = await client.post("/data/dispatch", json=request(operation, data, idem))
+    response = await client.post("/data/dispatch", json=payload)
     elapsed = perf_counter() - started
     body = response.json()
     body_data = body.get("data") if isinstance(body.get("data"), dict) else {}
@@ -152,9 +158,9 @@ async def main() -> None:
             "content_base64": content,
         }
         replay_idem = f"idem_{uuid4().hex}"
+        replay_request = request("CREATE", replay_payload, replay_idem)
         replay = [
-            await timed(client, "CREATE", replay_payload, replay_idem)
-            for _ in range(min(args.count * 5, 500))
+            await timed_request(client, replay_request) for _ in range(min(args.count * 5, 500))
         ]
         for object_id in ids:
             await timed(
