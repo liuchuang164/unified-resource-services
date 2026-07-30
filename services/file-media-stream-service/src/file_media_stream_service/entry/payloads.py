@@ -20,7 +20,7 @@ class ResourceIdPayload(StrictPayload):
 
 
 class CreateStreamPayload(StrictPayload):
-    protocol: Literal["WEBSOCKET", "WEBRTC", "RTMP", "HLS"]
+    protocol: Literal["WEBSOCKET", "WEBRTC", "RTMP", "HLS", "WS_AUDIO", "WS_VIDEO"]
     direction: Literal["INGRESS", "EGRESS", "BIDIRECTIONAL"]
 
 

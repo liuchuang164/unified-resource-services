@@ -9,6 +9,11 @@ from file_media_stream_service.adapters.coordination.redis import (
     create_redis_client,
 )
 from file_media_stream_service.adapters.event_bus import InMemoryEventBus
+from file_media_stream_service.adapters.media_provider import (
+    FakeMediaProvider,
+    GenericHttpMediaProvider,
+    InMemoryStreamCoordination,
+)
 from file_media_stream_service.adapters.media_server import InMemoryMediaServer
 from file_media_stream_service.adapters.object_storage import InMemoryObjectStorage
 from file_media_stream_service.adapters.object_storage.minio import (
@@ -21,6 +26,7 @@ from file_media_stream_service.adapters.persistence import (
     InMemoryProcessingJobRepository,
     InMemoryReconciliationStore,
     InMemoryState,
+    InMemoryStreamEventSink,
     InMemoryStreamSessionRepository,
 )
 from file_media_stream_service.adapters.persistence.postgres import (
@@ -30,6 +36,7 @@ from file_media_stream_service.adapters.persistence.postgres import (
     PostgresIdempotencyStore,
     PostgresProcessingJobRepository,
     PostgresReconciliationStore,
+    PostgresStreamEventSink,
     PostgresStreamSessionRepository,
     PostgresTransactionManager,
     create_engine,
@@ -39,10 +46,12 @@ from file_media_stream_service.adapters.processors import InMemoryProcessor
 from file_media_stream_service.adapters.production_boundaries import (
     ExternalSecurityBoundary,
     StructuredEventBus,
+    UnavailableMediaProvider,
     UnavailableMediaServer,
     UnavailableProcessor,
 )
 from file_media_stream_service.adapters.readiness import ProductionReadiness
+from file_media_stream_service.application.ports.media_provider import MediaProviderPort
 from file_media_stream_service.application.use_cases import UseCases
 from file_media_stream_service.audit import InMemoryAuditSink
 from file_media_stream_service.config import Settings
@@ -56,6 +65,16 @@ OPERATIONS = (
     "media.create_stream_session",
     "media.get_stream_session",
     "media.close_stream_session",
+    "media.submit_processing_job",
+    "media.get_processing_job",
+)
+AUTHORIZATION_ACTIONS = (
+    "file.initialize_upload",
+    "file.get_resource",
+    "stream:create",
+    "stream:publish",
+    "stream:subscribe",
+    "stream:close",
     "media.submit_processing_job",
     "media.get_processing_job",
 )
@@ -74,6 +93,9 @@ class Container:
     security: FakeSecurity
     idempotency: InMemoryIdempotencyStore
     reconciliation: InMemoryReconciliationStore
+    media_provider: FakeMediaProvider
+    stream_coordination: InMemoryStreamCoordination
+    stream_events: InMemoryStreamEventSink
 
 
 @dataclass(slots=True)
@@ -99,12 +121,15 @@ def build_container(settings: Settings | None = None) -> Container | ProductionC
     audit = InMemoryAuditSink()
     idempotency = InMemoryIdempotencyStore()
     reconciliation = InMemoryReconciliationStore()
+    media_provider = FakeMediaProvider(media_server)
+    stream_coordination = InMemoryStreamCoordination()
+    stream_events = InMemoryStreamEventSink()
     rules = tuple(
         AuthorizationRule("dev-service", "dev-tenant", "development", operation, allowed=True)
-        for operation in OPERATIONS
+        for operation in AUTHORIZATION_ACTIONS
     ) + tuple(
         AuthorizationRule("dev-agent", "dev-tenant", "development", operation, allowed=True)
-        for operation in OPERATIONS
+        for operation in AUTHORIZATION_ACTIONS
     )
     security = FakeSecurity(rules=rules, valid_tokens=frozenset({"dev-capability-token"}))
     use_cases = UseCases(
@@ -119,6 +144,9 @@ def build_container(settings: Settings | None = None) -> Container | ProductionC
         ids=UuidIdentifierFactory(),
         reconciliation=reconciliation,
         stream_lease_seconds=settings.stream_lease_seconds,
+        media_provider=media_provider,
+        stream_coordination=stream_coordination,
+        stream_events=stream_events,
     )
     entry = UnifiedEntry(
         use_cases=use_cases,
@@ -144,6 +172,9 @@ def build_container(settings: Settings | None = None) -> Container | ProductionC
         security=security,
         idempotency=idempotency,
         reconciliation=reconciliation,
+        media_provider=media_provider,
+        stream_coordination=stream_coordination,
+        stream_events=stream_events,
     )
 
 
@@ -183,6 +214,16 @@ def build_production_container(settings: Settings) -> ProductionContainer:
     durable_idempotency = PostgresIdempotencyStore(sessions)
     idempotency = RedisCoordinatedIdempotencyStore(coordination, durable_idempotency)
     security = ExternalSecurityBoundary()
+    media_provider: MediaProviderPort
+    if settings.media_provider_base_url and settings.media_provider_api_token:
+        media_provider = GenericHttpMediaProvider(
+            settings.media_provider_base_url,
+            api_token=settings.media_provider_api_token.get_secret_value(),
+            timeout_seconds=settings.media_provider_timeout_seconds,
+        )
+    else:
+        media_provider = UnavailableMediaProvider()
+    stream_events = PostgresStreamEventSink(sessions)
     use_cases = UseCases(
         files=PostgresFileRepository(sessions),
         sessions=PostgresStreamSessionRepository(sessions),
@@ -195,6 +236,9 @@ def build_production_container(settings: Settings) -> ProductionContainer:
         ids=UuidIdentifierFactory(),
         reconciliation=reconciliation,
         stream_lease_seconds=settings.stream_lease_seconds,
+        media_provider=media_provider,
+        stream_coordination=coordination,
+        stream_events=stream_events,
     )
     entry = UnifiedEntry(
         use_cases=use_cases,

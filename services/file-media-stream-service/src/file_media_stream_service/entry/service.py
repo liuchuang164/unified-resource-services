@@ -107,9 +107,9 @@ class UnifiedEntry:
         payload = payload_model.model_validate(request.payload).model_dump()
         await self.identity.verify(context)
         await self.capability.verify_capability(context, request.operation)
-        await self.authorization.authorize(
-            context, request.operation, self._resource_scope(payload)
-        )
+        resource_scope = self._resource_scope(payload)
+        for action in self._authorization_actions(request.operation, payload):
+            await self.authorization.authorize(context, action, resource_scope)
         await self.replay.check_and_record(context)
         request_hash = canonical_request_hash(payload)
         if request.operation in IDEMPOTENT_OPERATIONS:
@@ -149,6 +149,22 @@ class UnifiedEntry:
             if key in payload:
                 return str(payload[key])
         return None
+
+    @staticmethod
+    def _authorization_actions(operation: str, payload: dict[str, Any]) -> tuple[str, ...]:
+        if operation == "media.create_stream_session":
+            direction = str(payload.get("direction", ""))
+            data_actions = {
+                "INGRESS": ("stream:publish",),
+                "EGRESS": ("stream:subscribe",),
+                "BIDIRECTIONAL": ("stream:publish", "stream:subscribe"),
+            }
+            return ("stream:create", *data_actions.get(direction, ()))
+        if operation == "media.get_stream_session":
+            return ("stream:subscribe",)
+        if operation == "media.close_stream_session":
+            return ("stream:close",)
+        return (operation,)
 
     @staticmethod
     def _failure(request: UnifiedRequest, error: DomainError) -> UnifiedResponse:

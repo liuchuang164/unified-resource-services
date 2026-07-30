@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     minio_presigned_download_ttl_seconds: int = Field(
         default=300, ge=60, le=3600, validation_alias="MINIO_PRESIGNED_DOWNLOAD_TTL_SECONDS"
     )
+    media_provider_base_url: str | None = Field(
+        default=None, validation_alias="MEDIA_PROVIDER_BASE_URL"
+    )
+    media_provider_api_token: SecretStr | None = Field(
+        default=None, validation_alias="MEDIA_PROVIDER_API_TOKEN"
+    )
+    media_provider_timeout_seconds: float = Field(
+        default=5, gt=0, validation_alias="MEDIA_PROVIDER_TIMEOUT_SECONDS"
+    )
 
     @model_validator(mode="after")
     def validate_mode(self) -> "Settings":

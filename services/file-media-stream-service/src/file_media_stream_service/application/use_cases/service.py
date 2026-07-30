@@ -4,6 +4,11 @@ from datetime import timedelta
 from typing import Any
 
 from file_media_stream_service.application.dto.contracts import RequestContext
+from file_media_stream_service.application.ports.media_provider import (
+    MediaProviderPort,
+    StreamCoordinationPort,
+    StreamLease,
+)
 from file_media_stream_service.application.ports.protocols import (
     Clock,
     EventBus,
@@ -14,16 +19,20 @@ from file_media_stream_service.application.ports.protocols import (
     ProcessingJobRepository,
     Processor,
     ReconciliationStore,
+    StreamEventSink,
     StreamSessionRepository,
 )
 from file_media_stream_service.domain.entities.models import (
     FileResource,
     ProcessingJob,
+    StreamEvent,
     StreamSession,
 )
 from file_media_stream_service.domain.enums.status import (
     FileResourceStatus,
     ProcessingJobStatus,
+    StreamConnectionState,
+    StreamEventType,
     StreamSessionStatus,
 )
 from file_media_stream_service.domain.exceptions.errors import (
@@ -105,6 +114,9 @@ class UseCases:
         ids: IdentifierFactory,
         reconciliation: ReconciliationStore,
         stream_lease_seconds: int = 300,
+        media_provider: MediaProviderPort | None = None,
+        stream_coordination: StreamCoordinationPort | None = None,
+        stream_events: StreamEventSink | None = None,
     ) -> None:
         self.files = files
         self.sessions = sessions
@@ -117,6 +129,9 @@ class UseCases:
         self.ids = ids
         self.reconciliation = reconciliation
         self.stream_lease_seconds = stream_lease_seconds
+        self.media_provider = media_provider
+        self.stream_coordination = stream_coordination
+        self.stream_events = stream_events
 
     async def execute(
         self, operation: str, context: RequestContext, payload: dict[str, Any]
@@ -190,7 +205,9 @@ class UseCases:
             except Exception:
                 compensation_failed = True
             if not compensation_failed:
-                await self.reconciliation.resolve(recovery_key)
+                await self.reconciliation.resolve(
+                    recovery_key, context.tenant_id, context.biz_domain
+                )
             raise
         return {"resource": public_dict(resource), "upload_reference": upload_reference}
 
@@ -209,9 +226,6 @@ class UseCases:
     ) -> dict[str, Any]:
         session_id = self.ids.new_id("ses")
         lease = self.clock.now() + timedelta(seconds=self.stream_lease_seconds)
-        endpoint = await self.media_server.create_session(
-            str(payload["protocol"]), str(payload["direction"]), lease
-        )
         session = StreamSession(
             session_id=session_id,
             tenant_id=context.tenant_id,
@@ -221,10 +235,57 @@ class UseCases:
             direction=str(payload["direction"]),
             status=StreamSessionStatus.CREATING,
             lease_expires_at=lease,
-            endpoint_reference=endpoint,
+            endpoint_reference="",
             created_at=self.clock.now(),
             updated_at=self.clock.now(),
         )
+        stream_lease: StreamLease | None = None
+        if self.media_provider is not None and self.stream_coordination is not None:
+            stream_lease = await self.stream_coordination.acquire_stream_lease(
+                context.tenant_id, context.biz_domain, session_id
+            )
+            if stream_lease is None:
+                raise RuntimeError("Stream lease is unavailable")
+            try:
+                endpoint = await self.media_provider.create_stream_endpoint(
+                    context.tenant_id,
+                    context.biz_domain,
+                    session_id,
+                    str(payload["protocol"]),
+                    str(payload["direction"]),
+                    lease,
+                    stream_lease.fencing_token,
+                )
+            except Exception:
+                session.transition_to(StreamSessionStatus.FAILED)
+                session.fencing_token = stream_lease.fencing_token
+                await self.sessions.add(session)
+                await self.reconciliation.record(
+                    f"stream-provider:{session_id}",
+                    "STREAM_PROVIDER_CREATE_FAILED",
+                    {
+                        "tenant_id": context.tenant_id,
+                        "biz_domain": context.biz_domain,
+                        "session_id": session_id,
+                    },
+                )
+                await self.stream_coordination.release_stream(stream_lease)
+                raise
+            session.provider_type = endpoint.provider_type
+            session.stream_key = endpoint.stream_key
+            session.input_protocol = endpoint.input_protocol
+            session.output_protocol = endpoint.output_protocol
+            session.endpoint = endpoint.endpoint_reference
+            session.endpoint_reference = endpoint.media_server_session_id
+            session.media_server_session_id = endpoint.media_server_session_id
+            session.connection_state = StreamConnectionState.CONNECTING
+            session.fencing_token = stream_lease.fencing_token
+        else:
+            endpoint_reference = await self.media_server.create_session(
+                str(payload["protocol"]), str(payload["direction"]), lease
+            )
+            session.endpoint_reference = endpoint_reference
+            session.endpoint = endpoint_reference
         session.transition_to(StreamSessionStatus.READY)
         try:
             await self.sessions.add(session)
@@ -233,15 +294,28 @@ class UseCases:
             await self.reconciliation.record(
                 recovery_key,
                 "SESSION_CREATE_COMPENSATION",
-                {"session_id": session_id, "endpoint_reference": endpoint},
+                {
+                    "tenant_id": context.tenant_id,
+                    "biz_domain": context.biz_domain,
+                    "session_id": session_id,
+                },
             )
             try:
-                await self.media_server.close_session(endpoint)
+                if self.media_provider is not None and stream_lease is not None:
+                    await self.media_provider.stop_stream(
+                        session.media_server_session_id, stream_lease.fencing_token
+                    )
+                    await self.stream_coordination.release_stream(stream_lease)  # type: ignore[union-attr]
+                else:
+                    await self.media_server.close_session(session.endpoint_reference)
             except Exception:
                 raise
             else:
-                await self.reconciliation.resolve(recovery_key)
+                await self.reconciliation.resolve(
+                    recovery_key, context.tenant_id, context.biz_domain
+                )
             raise
+        await self._write_stream_event(session, StreamEventType.STREAM_CREATED)
         return {"session": public_dict(session)}
 
     async def get_stream_session(
@@ -263,8 +337,26 @@ class UseCases:
         if session is None:
             raise StreamSessionNotFound("Stream session not found")
         if session.status is not StreamSessionStatus.CLOSED:
-            await self.media_server.close_session(session.endpoint_reference)
+            stream_lease = StreamLease(
+                session.tenant_id,
+                session.biz_domain,
+                session.session_id,
+                session.fencing_token,
+            )
+            if self.media_provider is not None and session.media_server_session_id:
+                lease_is_current = (
+                    self.stream_coordination is not None
+                    and await self.stream_coordination.heartbeat_stream(stream_lease)
+                )
+                if not lease_is_current:
+                    raise RuntimeError("Stream lease was lost")
+                await self.media_provider.stop_stream(
+                    session.media_server_session_id, session.fencing_token
+                )
+            else:
+                await self.media_server.close_session(session.endpoint_reference)
             session.close()
+            session.connection_state = StreamConnectionState.DISCONNECTED
             try:
                 await self.sessions.save(session)
             except Exception:
@@ -298,7 +390,28 @@ class UseCases:
                         },
                     )
                 raise
+            if self.stream_coordination is not None:
+                await self.stream_coordination.release_stream(stream_lease)
+            await self._write_stream_event(session, StreamEventType.STREAM_DISCONNECTED)
         return {"session": public_dict(session)}
+
+    async def _write_stream_event(
+        self, session: StreamSession, event_type: StreamEventType
+    ) -> None:
+        if self.stream_events is None:
+            return
+        await self.stream_events.write_stream_event(
+            StreamEvent(
+                event_id=self.ids.new_id("evt"),
+                tenant_id=session.tenant_id,
+                biz_domain=session.biz_domain,
+                session_id=session.session_id,
+                event_type=event_type,
+                provider=session.provider_type,
+                timestamp=self.clock.now(),
+                metadata={"connection_state": session.connection_state.value},
+            )
+        )
 
     async def submit_processing_job(
         self, context: RequestContext, payload: dict[str, Any]
