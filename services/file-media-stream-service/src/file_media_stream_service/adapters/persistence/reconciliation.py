@@ -11,5 +11,6 @@ class InMemoryReconciliationStore:
     async def record(self, key: str, kind: str, payload: Mapping[str, Any]) -> None:
         self.pending[key] = (kind, dict(payload))
 
-    async def resolve(self, key: str) -> None:
+    async def resolve(self, key: str, tenant_id: str, biz_domain: str) -> None:
+        del tenant_id, biz_domain
         self.pending.pop(key, None)

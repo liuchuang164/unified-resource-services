@@ -5,6 +5,7 @@ from .repositories import (
     PostgresIdempotencyStore,
     PostgresProcessingJobRepository,
     PostgresReconciliationStore,
+    PostgresStreamEventSink,
     PostgresStreamSessionRepository,
 )
 from .session_factory import create_engine, create_session_registry
@@ -17,6 +18,7 @@ __all__ = [
     "PostgresIdempotencyStore",
     "PostgresProcessingJobRepository",
     "PostgresReconciliationStore",
+    "PostgresStreamEventSink",
     "PostgresStreamSessionRepository",
     "PostgresTransactionManager",
     "create_engine",

@@ -5,6 +5,10 @@ from typing import Any
 import structlog
 
 from file_media_stream_service.application.dto import RequestContext
+from file_media_stream_service.application.ports.media_provider import (
+    MediaEndpoint,
+    MediaStreamStatus,
+)
 from file_media_stream_service.domain.exceptions import PermissionDenied, Unauthenticated
 
 logger = structlog.get_logger(__name__)
@@ -35,6 +39,34 @@ class UnavailableMediaServer:
 
     async def close_session(self, endpoint_reference: str) -> None:
         raise RuntimeError("Media server integration is outside Phase 1")
+
+
+class UnavailableMediaProvider:
+    async def create_stream_endpoint(
+        self,
+        tenant_id: str,
+        biz_domain: str,
+        session_id: str,
+        protocol: str,
+        direction: str,
+        lease_expires_at: datetime,
+        fencing_token: int,
+    ) -> MediaEndpoint:
+        raise RuntimeError("Media provider is not configured")
+
+    async def start_stream(self, media_server_session_id: str, fencing_token: int) -> None:
+        raise RuntimeError("Media provider is not configured")
+
+    async def stop_stream(self, media_server_session_id: str, fencing_token: int) -> None:
+        raise RuntimeError("Media provider is not configured")
+
+    async def get_stream_status(
+        self, media_server_session_id: str, fencing_token: int
+    ) -> MediaStreamStatus:
+        return MediaStreamStatus(False, False)
+
+    async def health_check(self) -> bool:
+        return False
 
 
 class UnavailableProcessor:

@@ -4,6 +4,7 @@ from .core import (
     PostgresIdempotencyStore,
     PostgresProcessingJobRepository,
     PostgresReconciliationStore,
+    PostgresStreamEventSink,
     PostgresStreamSessionRepository,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "PostgresIdempotencyStore",
     "PostgresProcessingJobRepository",
     "PostgresReconciliationStore",
+    "PostgresStreamEventSink",
     "PostgresStreamSessionRepository",
 ]

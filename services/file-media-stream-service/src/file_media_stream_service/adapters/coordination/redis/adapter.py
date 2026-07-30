@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
 from file_media_stream_service.application.dto import RequestContext
+from file_media_stream_service.application.ports.media_provider import StreamLease
 from file_media_stream_service.application.ports.protocols import IdempotencyStore
 from file_media_stream_service.domain.exceptions import (
     QuotaExceeded,
@@ -48,7 +49,9 @@ class RedisCoordination:
 
     def idempotency_key(self, scope: tuple[str, ...]) -> str:
         tenant, domain, caller, operation, key = scope
-        return f"fms:idem:{tenant}:{domain}:{caller}:{operation}:{_digest(key)}"
+        return "fms:idem:" + ":".join(
+            _digest(value) for value in (tenant, domain, caller, operation, key)
+        )
 
     async def acquire(self, key: str, ttl_ms: int | None = None) -> Lease | None:
         owner = secrets.token_urlsafe(24)
@@ -80,8 +83,50 @@ class RedisCoordination:
     async def set_stream_lease(
         self, tenant_id: str, biz_domain: str, session_id: str, owner: str
     ) -> bool:
-        key = f"fms:stream-lease:{tenant_id}:{biz_domain}:{session_id}"
+        key = "fms:stream-lease:" + ":".join(
+            _digest(value) for value in (tenant_id, biz_domain, session_id)
+        )
         return bool(await self.client.set(key, owner, nx=True, px=self.lease_ttl_ms))
+
+    async def acquire_stream_lease(
+        self, tenant_id: str, biz_domain: str, session_id: str
+    ) -> StreamLease | None:
+        key = self._stream_key(tenant_id, biz_domain, session_id)
+        fencing_token = int(await self.client.incr(f"{key}:fence"))
+        acquired = await self.client.set(key, str(fencing_token), nx=True, px=self.lease_ttl_ms)
+        if not acquired:
+            return None
+        return StreamLease(tenant_id, biz_domain, session_id, fencing_token)
+
+    async def heartbeat_stream(self, lease: StreamLease) -> bool:
+        result = await cast(
+            Awaitable[Any],
+            self.client.eval(
+                self.RENEW_SCRIPT,
+                1,
+                self._stream_key(lease.tenant_id, lease.biz_domain, lease.session_id),
+                str(lease.fencing_token),
+                str(self.lease_ttl_ms),
+            ),
+        )
+        return bool(result)
+
+    async def release_stream(self, lease: StreamLease) -> bool:
+        result = await cast(
+            Awaitable[Any],
+            self.client.eval(
+                self.RELEASE_SCRIPT,
+                1,
+                self._stream_key(lease.tenant_id, lease.biz_domain, lease.session_id),
+                str(lease.fencing_token),
+            ),
+        )
+        return bool(result)
+
+    @staticmethod
+    def _stream_key(tenant_id: str, biz_domain: str, session_id: str) -> str:
+        scope = ":".join(_digest(value) for value in (tenant_id, biz_domain, session_id))
+        return f"fms:stream:{scope}:lease"
 
     async def health(self) -> bool:
         try:
@@ -103,7 +148,10 @@ class RedisReplayProtector:
             raise ReplayDetected("Agent calls require a nonce")
         if not context.nonce:
             return
-        key = f"fms:replay:{context.tenant_id}:{context.biz_domain}:{_digest(context.nonce)}"
+        key = "fms:replay:" + ":".join(
+            _digest(value)
+            for value in (context.tenant_id, context.biz_domain, context.nonce)
+        )
         if not await self.client.set(key, "1", nx=True, ex=self.ttl_seconds):
             raise ReplayDetected("Request nonce has already been used")
 
@@ -116,7 +164,10 @@ class RedisQuotaChecker:
 
     async def check(self, context: RequestContext, operation: str) -> None:
         window = int(time.time()) // self.window_seconds
-        key = f"fms:quota:{context.tenant_id}:{context.biz_domain}:{_digest(operation)}:{window}"
+        scope = ":".join(
+            _digest(value) for value in (context.tenant_id, context.biz_domain, operation)
+        )
+        key = f"fms:quota:{scope}:{window}"
         pipeline = self.client.pipeline(transaction=True)
         pipeline.incr(key)
         pipeline.expire(key, self.window_seconds + 1)

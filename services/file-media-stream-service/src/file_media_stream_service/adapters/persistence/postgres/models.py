@@ -67,6 +67,17 @@ class StreamSessionRow(ScopeMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     endpoint_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_type: Mapped[str] = mapped_column(String(64), nullable=False, default="legacy")
+    stream_key: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    input_protocol: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    output_protocol: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    media_server_session_id: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    connection_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="DISCONNECTED"
+    )
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -150,3 +161,18 @@ class ReconciliationRecordRow(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class StreamEventRow(ScopeMixin, Base):
+    __tablename__ = "stream_event"
+    __table_args__ = (
+        UniqueConstraint("event_id"),
+        Index("ix_stream_event_scope_session", "tenant_id", "biz_domain", "session_id"),
+        Index("ix_stream_event_scope_timestamp", "tenant_id", "biz_domain", "timestamp"),
+    )
+    event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    metadata_json: Mapped[dict[str, str]] = mapped_column("metadata", JSON, nullable=False)

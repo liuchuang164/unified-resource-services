@@ -3,6 +3,7 @@ from .in_memory import (
     InMemoryIdempotencyStore,
     InMemoryProcessingJobRepository,
     InMemoryState,
+    InMemoryStreamEventSink,
     InMemoryStreamSessionRepository,
 )
 from .reconciliation import InMemoryReconciliationStore
@@ -13,5 +14,6 @@ __all__ = [
     "InMemoryProcessingJobRepository",
     "InMemoryReconciliationStore",
     "InMemoryState",
+    "InMemoryStreamEventSink",
     "InMemoryStreamSessionRepository",
 ]

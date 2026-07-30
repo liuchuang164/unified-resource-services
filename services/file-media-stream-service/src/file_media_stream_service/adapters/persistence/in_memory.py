@@ -5,8 +5,10 @@ from typing import Any
 from file_media_stream_service.domain.entities.models import (
     FileResource,
     ProcessingJob,
+    StreamEvent,
     StreamSession,
 )
+from file_media_stream_service.domain.enums import StreamSessionStatus
 from file_media_stream_service.domain.exceptions.errors import IdempotencyConflict
 
 
@@ -52,6 +54,23 @@ class InMemoryStreamSessionRepository:
     ) -> StreamSession | None:
         value = self.state.sessions.get((tenant_id, biz_domain, session_id))
         return deepcopy(value)
+
+    async def list_recoverable(self, tenant_id: str, biz_domain: str) -> list[StreamSession]:
+        return [
+            deepcopy(session)
+            for (tenant, domain, _), session in self.state.sessions.items()
+            if tenant == tenant_id
+            and domain == biz_domain
+            and session.status in {StreamSessionStatus.READY, StreamSessionStatus.ACTIVE}
+        ]
+
+
+class InMemoryStreamEventSink:
+    def __init__(self) -> None:
+        self.events: list[StreamEvent] = []
+
+    async def write_stream_event(self, event: StreamEvent) -> None:
+        self.events.append(deepcopy(event))
 
 
 class InMemoryProcessingJobRepository:

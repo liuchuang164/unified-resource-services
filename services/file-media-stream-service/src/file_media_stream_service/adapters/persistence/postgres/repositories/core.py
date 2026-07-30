@@ -11,11 +11,13 @@ from file_media_stream_service.domain.entities import (
     AuditEvent,
     FileResource,
     ProcessingJob,
+    StreamEvent,
     StreamSession,
 )
 from file_media_stream_service.domain.enums import (
     FileResourceStatus,
     ProcessingJobStatus,
+    StreamConnectionState,
     StreamSessionStatus,
 )
 from file_media_stream_service.domain.exceptions import IdempotencyConflict
@@ -26,6 +28,7 @@ from ..models import (
     IdempotencyRecordRow,
     ProcessingJobRow,
     ReconciliationRecordRow,
+    StreamEventRow,
     StreamSessionRow,
 )
 
@@ -119,7 +122,16 @@ class PostgresStreamSessionRepository:
             return
         row.status = value.status.value
         row.lease_expires_at = value.lease_expires_at
-        row.endpoint_reference = value.endpoint_reference
+        row.endpoint_reference = value.media_server_session_id or value.endpoint_reference
+        row.provider_type = value.provider_type
+        row.stream_key = ""
+        row.input_protocol = value.input_protocol
+        row.output_protocol = value.output_protocol
+        row.endpoint = ""
+        row.media_server_session_id = value.media_server_session_id
+        row.last_heartbeat_at = value.last_heartbeat_at
+        row.connection_state = value.connection_state.value
+        row.fencing_token = value.fencing_token
         row.updated_at = value.updated_at
         await self.sessions().flush()
 
@@ -148,7 +160,55 @@ class PostgresStreamSessionRepository:
                 row.endpoint_reference,
                 row.created_at,
                 row.updated_at,
+                row.provider_type,
+                row.stream_key,
+                row.input_protocol,
+                row.output_protocol,
+                row.endpoint,
+                row.media_server_session_id,
+                row.last_heartbeat_at,
+                StreamConnectionState(row.connection_state),
+                row.fencing_token,
             )
+        )
+
+    async def list_recoverable(self, tenant_id: str, biz_domain: str) -> list[StreamSession]:
+        rows = (
+            await self.sessions().scalars(
+                select(StreamSessionRow).where(
+                    StreamSessionRow.tenant_id == tenant_id,
+                    StreamSessionRow.biz_domain == biz_domain,
+                    StreamSessionRow.status.in_(
+                        [StreamSessionStatus.READY.value, StreamSessionStatus.ACTIVE.value]
+                    ),
+                )
+            )
+        ).all()
+        return [self._entity(row) for row in rows]
+
+    @staticmethod
+    def _entity(row: StreamSessionRow) -> StreamSession:
+        return StreamSession(
+            row.session_id,
+            row.tenant_id,
+            row.biz_domain,
+            row.caller_id,
+            row.protocol,
+            row.direction,
+            StreamSessionStatus(row.status),
+            row.lease_expires_at,
+            row.endpoint_reference,
+            row.created_at,
+            row.updated_at,
+            row.provider_type,
+            row.stream_key,
+            row.input_protocol,
+            row.output_protocol,
+            row.endpoint,
+            row.media_server_session_id,
+            row.last_heartbeat_at,
+            StreamConnectionState(row.connection_state),
+            row.fencing_token,
         )
 
     @staticmethod
@@ -162,10 +222,43 @@ class PostgresStreamSessionRepository:
             direction=value.direction,
             status=value.status.value,
             lease_expires_at=value.lease_expires_at,
-            endpoint_reference=value.endpoint_reference,
+            endpoint_reference=value.media_server_session_id or value.endpoint_reference,
+            provider_type=value.provider_type,
+            stream_key="",
+            input_protocol=value.input_protocol,
+            output_protocol=value.output_protocol,
+            endpoint="",
+            media_server_session_id=value.media_server_session_id,
+            last_heartbeat_at=value.last_heartbeat_at,
+            connection_state=value.connection_state.value,
+            fencing_token=value.fencing_token,
             created_at=value.created_at,
             updated_at=value.updated_at,
         )
+
+
+class PostgresStreamEventSink:
+    def __init__(self, sessions: async_scoped_session[AsyncSession]) -> None:
+        self.sessions = sessions
+
+    async def write_stream_event(self, event: StreamEvent) -> None:
+        if set(event.metadata) - {"connection_state"}:
+            raise ValueError("Stream event metadata contains forbidden fields")
+        if any(len(key) > 64 or len(value) > 128 for key, value in event.metadata.items()):
+            raise ValueError("Stream event metadata is too large")
+        self.sessions().add(
+            StreamEventRow(
+                event_id=event.event_id,
+                tenant_id=event.tenant_id,
+                biz_domain=event.biz_domain,
+                session_id=event.session_id,
+                event_type=event.event_type.value,
+                provider=event.provider,
+                timestamp=event.timestamp,
+                metadata_json=event.metadata,
+            )
+        )
+        await self.sessions().flush()
 
 
 class PostgresProcessingJobRepository:
@@ -290,9 +383,13 @@ class PostgresReconciliationStore:
             )
         )
 
-    async def resolve(self, key: str) -> None:
+    async def resolve(self, key: str, tenant_id: str, biz_domain: str) -> None:
         await self.sessions().execute(
-            delete(ReconciliationRecordRow).where(ReconciliationRecordRow.key == key)
+            delete(ReconciliationRecordRow).where(
+                ReconciliationRecordRow.key == key,
+                ReconciliationRecordRow.tenant_id == tenant_id,
+                ReconciliationRecordRow.biz_domain == biz_domain,
+            )
         )
 
 
