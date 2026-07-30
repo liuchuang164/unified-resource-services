@@ -140,8 +140,10 @@ jobs:
         run: pytest -m consistency -q
       - name: Redis integration and security tests
         run: pytest -m redis -q
-      - name: MinIO integration and security tests
-        run: pytest tests/integration/minio tests/security/minio -q
+      - name: MinIO integration tests
+        run: pytest tests/integration/minio -q -x --tb=short
+      - name: MinIO security tests
+        run: pytest tests/security/minio -q -x --tb=short
       - name: Migration tests
         run: pytest -m migration -q
       - name: Performance baseline smoke tests
@@ -163,7 +165,8 @@ jobs:
           coverage run --append -m pytest -m reliability -q
           coverage run --append -m pytest -m consistency -q
           coverage run --append -m pytest -m redis -q
-          coverage run --append -m pytest tests/integration/minio tests/security/minio -q
+          coverage run --append -m pytest tests/integration/minio -q
+          coverage run --append -m pytest tests/security/minio -q
           coverage report --fail-under=85
       - name: Secret scan
         run: |
