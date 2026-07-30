@@ -13,7 +13,10 @@ pytestmark = pytest.mark.minio
 
 
 def _minio_request(payload_data: dict[str, object]) -> dict[str, object]:
+    marker = uuid4().hex
     req = base_request(
+        request_id=f"req_MINIO_SECURITY_{marker}",
+        trace_id=f"trace_MINIO_SECURITY_{marker}",
         operation="CREATE",
         resource={
             "target": "MINIO",

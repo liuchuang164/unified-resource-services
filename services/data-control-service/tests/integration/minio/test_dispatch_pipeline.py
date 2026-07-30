@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
@@ -149,7 +150,11 @@ async def test_minio_presigned_upload_complete_and_idempotency() -> None:
             "DELETE", {"logical_object_id": logical_object_id}, "idem_replay_minio"
         )
         first_delete = await client.post("/data/dispatch", json=replay_payload)
-        second_delete = await client.post("/data/dispatch", json=replay_payload)
+        second_replay_payload = deepcopy(replay_payload)
+        replay_key = uuid4().hex
+        second_replay_payload["request_id"] = f"req_MINIO_REPLAY_{replay_key}"
+        second_replay_payload["trace_id"] = f"trace_MINIO_REPLAY_{replay_key}"
+        second_delete = await client.post("/data/dispatch", json=second_replay_payload)
 
     assert put.status_code in {200, 204}
     assert complete.status_code == 200
