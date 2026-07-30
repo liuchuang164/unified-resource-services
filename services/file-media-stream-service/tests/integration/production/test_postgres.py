@@ -12,6 +12,7 @@ from file_media_stream_service.adapters.persistence.postgres import (
     PostgresIdempotencyStore,
     PostgresProcessingJobRepository,
     PostgresReconciliationStore,
+    PostgresStreamEventSink,
     PostgresStreamSessionRepository,
     create_engine,
     create_session_registry,
@@ -21,17 +22,21 @@ from file_media_stream_service.adapters.persistence.postgres.models import (
     FileResourceRow,
     ProcessingJobRow,
     ReconciliationRecordRow,
+    StreamEventRow,
     StreamSessionRow,
 )
 from file_media_stream_service.domain.entities import (
     AuditEvent,
     FileResource,
     ProcessingJob,
+    StreamEvent,
     StreamSession,
 )
 from file_media_stream_service.domain.enums import (
     FileResourceStatus,
     ProcessingJobStatus,
+    StreamConnectionState,
+    StreamEventType,
     StreamSessionStatus,
 )
 
@@ -75,6 +80,14 @@ async def test_repository_scope_rollback_unique_audit_and_reconciliation() -> No
     try:
         await sessions().execute(
             FileResourceRow.__table__.delete().where(FileResourceRow.resource_id.like("res_pg%"))
+        )
+        await sessions().execute(
+            AuditEventRow.__table__.delete().where(AuditEventRow.audit_id == "audit_pg")
+        )
+        await sessions().execute(
+            ReconciliationRecordRow.__table__.delete().where(
+                ReconciliationRecordRow.key == "recon_pg"
+            )
         )
         await sessions().commit()
         await files.add(resource())
@@ -135,7 +148,7 @@ async def test_repository_scope_rollback_unique_audit_and_reconciliation() -> No
             )
             == 1
         )
-        await reconciliation.resolve("recon_pg")
+        await reconciliation.resolve("recon_pg", "tenant_a", "files")
         await sessions().commit()
     finally:
         await sessions.remove()
@@ -186,6 +199,14 @@ async def test_stream_and_job_repository_state_updates_are_scoped() -> None:
         now,
         now,
     )
+    stream.provider_type = "fake"
+    stream.media_server_session_id = "provider-session"
+    stream.stream_key = "opaque-key"
+    stream.input_protocol = "WEBRTC"
+    stream.output_protocol = "WEBRTC"
+    stream.endpoint = "opaque-endpoint"
+    stream.connection_state = StreamConnectionState.CONNECTING
+    stream.fencing_token = 9
     job = ProcessingJob(
         "job-pg",
         "tenant-a",
@@ -206,21 +227,51 @@ async def test_stream_and_job_repository_state_updates_are_scoped() -> None:
         await sessions().execute(
             ProcessingJobRow.__table__.delete().where(ProcessingJobRow.job_id == "job-pg")
         )
+        await sessions().execute(
+            StreamEventRow.__table__.delete().where(StreamEventRow.event_id == "event-pg")
+        )
         await streams.add(stream)
         await jobs.add(job)
         stream.transition_to(StreamSessionStatus.READY)
         job.transition_to(ProcessingJobStatus.QUEUED)
         await streams.save(stream)
         await jobs.save(job)
+        await PostgresStreamEventSink(sessions).write_stream_event(
+            StreamEvent(
+                "event-pg",
+                "tenant-a",
+                "legal",
+                "session-pg",
+                StreamEventType.STREAM_CREATED,
+                "fake",
+                now,
+                {"connection_state": "CONNECTING"},
+            )
+        )
         await sessions().commit()
         loaded_stream = await streams.get_by_scope_and_id("tenant-a", "legal", "session-pg")
         loaded_job = await jobs.get_by_scope_and_id("tenant-a", "legal", "job-pg")
         assert loaded_stream is not None
         assert loaded_stream.status is StreamSessionStatus.READY
+        assert loaded_stream.provider_type == "fake"
+        assert loaded_stream.fencing_token == 9
         assert loaded_job is not None
         assert loaded_job.status is ProcessingJobStatus.QUEUED
         assert await streams.get_by_scope_and_id("tenant-b", "legal", "session-pg") is None
         assert await jobs.get_by_scope_and_id("tenant-a", "finance", "job-pg") is None
+        assert len(await streams.list_recoverable("tenant-a", "legal")) >= 1
+        assert (
+            await sessions().scalar(
+                select(func.count())
+                .select_from(StreamEventRow)
+                .where(
+                    StreamEventRow.tenant_id == "tenant-a",
+                    StreamEventRow.biz_domain == "legal",
+                    StreamEventRow.session_id == "session-pg",
+                )
+            )
+            == 1
+        )
     finally:
         await sessions.rollback()
         await sessions.remove()

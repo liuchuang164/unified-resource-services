@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from file_media_stream_service.adapters.clock import SystemClock, UuidIdentifierFactory
 from file_media_stream_service.adapters.coordination.redis import (
@@ -22,7 +22,11 @@ from file_media_stream_service.adapters.persistence.postgres import (
     create_engine,
     create_session_registry,
 )
-from file_media_stream_service.adapters.persistence.postgres.models import FileResourceRow
+from file_media_stream_service.adapters.persistence.postgres.models import (
+    AuditEventRow,
+    FileResourceRow,
+    IdempotencyRecordRow,
+)
 from file_media_stream_service.adapters.production_boundaries import (
     StructuredEventBus,
     UnavailableMediaServer,
@@ -89,6 +93,16 @@ async def test_business_and_agent_pipeline_use_real_production_infrastructure() 
         clock,
     )
     try:
+        await sessions().execute(
+            delete(AuditEventRow).where(AuditEventRow.tenant_id == "tenant-e2e")
+        )
+        await sessions().execute(
+            delete(IdempotencyRecordRow).where(IdempotencyRecordRow.tenant_id == "tenant-e2e")
+        )
+        await sessions().execute(
+            delete(FileResourceRow).where(FileResourceRow.tenant_id == "tenant-e2e")
+        )
+        await sessions().commit()
         service_context = RequestContext(
             request_id="e2e-business",
             trace_id="trace-business",

@@ -52,6 +52,18 @@ async def test_lease_owner_expiry_renew_replay_and_quota() -> None:
     assert await coordination.acquire("fms:test:expiry", 100) is not None
     assert await coordination.set_stream_lease("tenant-a", "legal", "session-a", "owner-a")
     assert not await coordination.set_stream_lease("tenant-a", "legal", "session-a", "owner-b")
+    stream_lease = await coordination.acquire_stream_lease("tenant-a", "legal", "session-phase2")
+    assert stream_lease is not None
+    assert await coordination.acquire_stream_lease("tenant-a", "legal", "session-phase2") is None
+    assert await coordination.heartbeat_stream(stream_lease)
+    stale_stream_lease = type(stream_lease)(
+        stream_lease.tenant_id,
+        stream_lease.biz_domain,
+        stream_lease.session_id,
+        stream_lease.fencing_token + 1,
+    )
+    assert not await coordination.release_stream(stale_stream_lease)
+    assert await coordination.release_stream(stream_lease)
 
     replay = RedisReplayProtector(client)
     missing_nonce = context()
