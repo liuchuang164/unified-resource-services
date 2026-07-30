@@ -61,8 +61,27 @@ class InMemoryStreamSessionRepository:
             for (tenant, domain, _), session in self.state.sessions.items()
             if tenant == tenant_id
             and domain == biz_domain
-            and session.status in {StreamSessionStatus.READY, StreamSessionStatus.ACTIVE}
+            and session.status
+            in {
+                StreamSessionStatus.CREATING,
+                StreamSessionStatus.READY,
+                StreamSessionStatus.ACTIVE,
+            }
         ]
+
+    async def list_recovery_scopes(self) -> list[tuple[str, str]]:
+        return sorted(
+            {
+                (tenant, domain)
+                for (tenant, domain, _), session in self.state.sessions.items()
+                if session.status
+                in {
+                    StreamSessionStatus.CREATING,
+                    StreamSessionStatus.READY,
+                    StreamSessionStatus.ACTIVE,
+                }
+            }
+        )
 
 
 class InMemoryStreamEventSink:

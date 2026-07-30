@@ -5,7 +5,12 @@ from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_scoped_session,
+    async_sessionmaker,
+)
 
 from file_media_stream_service.domain.entities import (
     AuditEvent,
@@ -179,12 +184,34 @@ class PostgresStreamSessionRepository:
                     StreamSessionRow.tenant_id == tenant_id,
                     StreamSessionRow.biz_domain == biz_domain,
                     StreamSessionRow.status.in_(
-                        [StreamSessionStatus.READY.value, StreamSessionStatus.ACTIVE.value]
+                        [
+                            StreamSessionStatus.CREATING.value,
+                            StreamSessionStatus.READY.value,
+                            StreamSessionStatus.ACTIVE.value,
+                        ]
                     ),
                 )
             )
         ).all()
         return [self._entity(row) for row in rows]
+
+    async def list_recovery_scopes(self) -> list[tuple[str, str]]:
+        rows = (
+            await self.sessions().execute(
+                select(StreamSessionRow.tenant_id, StreamSessionRow.biz_domain)
+                .where(
+                    StreamSessionRow.status.in_(
+                        [
+                            StreamSessionStatus.CREATING.value,
+                            StreamSessionStatus.READY.value,
+                            StreamSessionStatus.ACTIVE.value,
+                        ]
+                    )
+                )
+                .distinct()
+            )
+        ).all()
+        return [(tenant_id, biz_domain) for tenant_id, biz_domain in rows]
 
     @staticmethod
     def _entity(row: StreamSessionRow) -> StreamSession:
@@ -392,6 +419,67 @@ class PostgresReconciliationStore:
             )
         )
 
+    async def list_pending(self, kind: str) -> list[tuple[str, dict[str, Any]]]:
+        rows = (
+            await self.sessions().scalars(
+                select(ReconciliationRecordRow).where(
+                    ReconciliationRecordRow.kind == kind,
+                    ReconciliationRecordRow.status == "PENDING",
+                )
+            )
+        ).all()
+        return [(row.key, dict(row.payload)) for row in rows]
+
+
+class PostgresIndependentReconciliationStore:
+    """Writes recovery truth in a transaction isolated from request failures."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self.factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def record(self, key: str, kind: str, payload: Mapping[str, Any]) -> None:
+        now = datetime.now(UTC)
+        serialized = dict(payload)
+        statement = insert(ReconciliationRecordRow).values(
+            key=key,
+            kind=kind,
+            tenant_id=str(payload["tenant_id"]),
+            biz_domain=str(payload["biz_domain"]),
+            payload=serialized,
+            status="PENDING",
+            created_at=now,
+            updated_at=now,
+        )
+        async with self.factory() as session, session.begin():
+            await session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[ReconciliationRecordRow.key],
+                    set_={"payload": serialized, "status": "PENDING", "updated_at": now},
+                )
+            )
+
+    async def resolve(self, key: str, tenant_id: str, biz_domain: str) -> None:
+        async with self.factory() as session, session.begin():
+            await session.execute(
+                delete(ReconciliationRecordRow).where(
+                    ReconciliationRecordRow.key == key,
+                    ReconciliationRecordRow.tenant_id == tenant_id,
+                    ReconciliationRecordRow.biz_domain == biz_domain,
+                )
+            )
+
+    async def list_pending(self, kind: str) -> list[tuple[str, dict[str, Any]]]:
+        async with self.factory() as session:
+            rows = (
+                await session.scalars(
+                    select(ReconciliationRecordRow).where(
+                        ReconciliationRecordRow.kind == kind,
+                        ReconciliationRecordRow.status == "PENDING",
+                    )
+                )
+            ).all()
+            return [(row.key, dict(row.payload)) for row in rows]
+
 
 class PostgresIdempotencyStore:
     def __init__(
@@ -444,6 +532,14 @@ class PostgresIdempotencyStore:
             raise IdempotencyConflict("Idempotency key was used with another request")
         if row.status == "COMPLETED":
             return ("COMPLETED", row.response_snapshot)
+        if row.expires_at <= now:
+            row.status = "RUNNING"
+            row.response_snapshot = None
+            row.updated_at = now
+            row.expires_at = now + timedelta(seconds=self.ttl_seconds)
+            await session.flush()
+            self._events.setdefault(scope, asyncio.Event())
+            return ("OWNER", None)
         return ("WAIT", None)
 
     async def wait(self, scope: tuple[str, ...]) -> None:
@@ -473,7 +569,7 @@ class PostgresIdempotencyStore:
         row.status = "COMPLETED"
         row.response_snapshot = result
         row.updated_at = datetime.now(UTC)
-        await self.sessions().flush()
+        await self.sessions().commit()
         self._events.setdefault(scope, asyncio.Event()).set()
 
     async def fail(self, scope: tuple[str, ...]) -> None:
