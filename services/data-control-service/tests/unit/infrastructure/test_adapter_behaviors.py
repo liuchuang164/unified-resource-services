@@ -36,15 +36,20 @@ async def test_minio_create_get_list_and_delete() -> None:
     create = _with_mapping(
         command(
             Operation.CREATE,
-            {"filename": "a.txt", "content_type": "text/plain", "size_bytes": 1},
+            {
+                "filename": "a.txt",
+                "content_type": "text/plain",
+                "size_bytes": 1,
+                "content_text": "a",
+            },
         ),
         1,
     )
     created = await adapter.execute(create, context())
-    object_id = created.data["object_id"]
-    get = _with_mapping(command(Operation.GET, {"object_id": object_id}), 1)
+    object_id = created.data["logical_object_id"]
+    get = _with_mapping(command(Operation.GET, {"logical_object_id": object_id}), 1)
     list_cmd = _with_mapping(command(Operation.LIST, {}), 1)
-    delete = _with_mapping(command(Operation.DELETE, {"object_id": object_id}), 1)
+    delete = _with_mapping(command(Operation.DELETE, {"logical_object_id": object_id}), 1)
     assert (await adapter.execute(get, context())).affected_count == 1
     assert (await adapter.execute(list_cmd, context())).affected_count == 1
     assert (await adapter.execute(delete, context())).data["deleted"] is True

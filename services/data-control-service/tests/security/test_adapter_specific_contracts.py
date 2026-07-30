@@ -15,11 +15,12 @@ async def test_minio_generates_tenant_prefixed_object_key() -> None:
     adapter = InMemoryMinIOAdapter()
     cmd = command(
         Operation.CREATE,
-        {"filename": "a.txt", "content_type": "text/plain", "size_bytes": 10},
+        {"filename": "a.txt", "content_type": "text/plain", "size_bytes": 1, "content_text": "a"},
     )
     cmd = _with_mapping(cmd, 1)
     result = await adapter.execute(cmd, context())
-    assert result.data["object_key"].startswith("tenant/tenant_demo/demo/asset/")
+    assert "object_key" not in result.data
+    assert result.data["logical_object_id"].startswith("obj_")
 
 
 async def test_redis_rejects_raw_command_and_enforces_ttl() -> None:

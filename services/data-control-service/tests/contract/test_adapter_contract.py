@@ -22,6 +22,10 @@ def test_all_phase1_adapters_are_registered() -> None:
     [
         (DataTarget.POSTGRESQL, Operation.BATCH),
         (DataTarget.MINIO, Operation.LIST),
+        (DataTarget.MINIO, Operation.EXISTS),
+        (DataTarget.MINIO, Operation.PRESIGN_UPLOAD),
+        (DataTarget.MINIO, Operation.UPLOAD_COMPLETE),
+        (DataTarget.MINIO, Operation.PRESIGN_DOWNLOAD),
         (DataTarget.REDIS, Operation.LOCK),
         (DataTarget.NEO4J, Operation.SEARCH),
         (DataTarget.MILVUS, Operation.SEARCH),
