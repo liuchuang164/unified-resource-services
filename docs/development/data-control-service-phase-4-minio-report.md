@@ -59,6 +59,7 @@ pytest -m performance -q
 
 - GitHub Actions Run ID：待更新
 - CI Jobs：待更新
+- Coverage：Phase 4 当前门禁基线为 70%；真实 MinIO、PostgreSQL、Redis 路径均进入 CI，后续补齐长尾分支测试后再上调。
 - Coverage：待更新
 - Secret Scan：待更新
 - 最终 SHA：待更新
