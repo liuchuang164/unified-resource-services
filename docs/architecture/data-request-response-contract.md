@@ -70,6 +70,9 @@
 
 - `GET`
 - `LIST`
+- `PRESIGN_UPLOAD`
+- `UPLOAD_COMPLETE`
+- `PRESIGN_DOWNLOAD`
 - `SEARCH`
 - `CREATE`
 - `UPDATE`
@@ -103,6 +106,8 @@ Adapter 只实现其声明支持的能力。未支持操作返回稳定错误，
 - 绕过最大分页和批量限制的参数。
 
 Redis `CACHE_ENTRY` 资源只接受服务端注册的逻辑字段：`logical_key`、`value`、`ttl_seconds`、`only_if_absent`、`only_if_present`、`lock_token`。物理 key 由 Resource Mapping 和可信 `tenant_id + biz_domain` 生成，调用方不得传 Redis URL、host、password、完整 key 或命令文本。
+
+MinIO `OBJECT_ASSET` 资源只接受服务端注册的逻辑字段：`logical_object_id`、`filename`、`content_type`、`size_bytes`、`content_base64`、`content_text`、`metadata`。`PRESIGN_UPLOAD` 先生成 `PENDING_UPLOAD` 记录和短期 URL，客户端上传后必须调用 `UPLOAD_COMPLETE` 确认对象存在、大小、类型和 SHA-256；`GET` 默认只返回 metadata；下载内容使用 `PRESIGN_DOWNLOAD`。调用方不得提交 bucket、object_key、endpoint、access_key、secret_key、本地路径或物理路径。
 
 ## 3. DataResponse
 
@@ -170,7 +175,7 @@ Redis `CACHE_ENTRY` 资源只接受服务端注册的逻辑字段：`logical_key
 
 ## 6. 幂等语义
 
-- `CREATE / UPDATE / UPSERT / DELETE / BATCH / LOCK / UNLOCK` 默认视为写操作；`GET / LIST / SEARCH / EXISTS` 视为读操作。
+- `CREATE / UPDATE / UPSERT / DELETE / BATCH / LOCK / UNLOCK / PRESIGN_UPLOAD / UPLOAD_COMPLETE` 默认视为写操作；`GET / LIST / SEARCH / EXISTS / PRESIGN_DOWNLOAD` 视为读操作。
 - 幂等摘要由规范化后的关键请求字段计算。
 - 首次请求处于 `PROCESSING` 时，重复请求返回 `IDEMPOTENCY_IN_PROGRESS`，或在限定时间内等待同一结果。
 - 已成功请求返回原结果并标记 `idempotency_replayed=true`。

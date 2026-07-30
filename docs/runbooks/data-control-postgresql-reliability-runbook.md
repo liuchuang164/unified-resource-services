@@ -20,7 +20,7 @@ alembic -c alembic-target.ini upgrade head
 
 期望 head：
 
-- control：`0006`
+- control：`0007`
 - target：`target_0001`
 
 旧 Phase 2 环境使用 `scripts/stamp_split_migrations.py` 过渡，禁止直接删库。

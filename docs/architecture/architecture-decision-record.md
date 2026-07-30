@@ -52,3 +52,4 @@
 - `ADR-0002-control-target-migration-separation.md`：Control / Target migration 拆分。
 - `adr/ADR-0003-audit-outbox-and-idempotency-recovery.md`：Audit Outbox 与 Idempotency Recovery。
 - `adr/ADR-0004-redis-adapter-and-lock-semantics.md`：Redis Adapter、TTL 与锁语义。
+- `adr/ADR-0005-minio-object-storage-contract.md`：MinIO 对象存储、metadata 状态机与预签名 URL 语义。

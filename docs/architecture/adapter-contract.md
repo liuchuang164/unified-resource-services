@@ -80,14 +80,18 @@ Adapter 不返回驱动堆栈给 API 层；原始异常先映射为内部异常�
 
 约束：
 
-- Object Key 固定前缀：`tenant/{tenant_id}/{biz_domain}/...`。
-- Bucket 和 Key 由逻辑资源映射器生成，不接受任意绝对路径。
-- 上传必须校验大小、MIME、扩展名和可选哈希。
-- 下载优先返回短时效受控 URL 或流，不返回存储凭据。
-- 删除默认软删除/墓碑；物理删除需显式高风险策略。
-- Multipart Upload 必须支持会话过期和清理。
+- Object Key 固定前缀：`tenant/{tenant_id}/{biz_domain}/{resource_name}/...`。
+- Bucket、Object Key 和 prefix template 只能来自服务端 Resource Mapping，不接受客户端任意绝对路径、bucket、object_key、endpoint 或 credentials。
+- 上传必须校验大小、Content-Type、扩展名和轻量 magic bytes，并计算独立 SHA-256；不得把 ETag 冒充 SHA-256。
+- `GET` 默认返回对象 metadata，不返回完整二进制内容。
+- 下载优先返回短时效 `PRESIGN_DOWNLOAD` URL，不返回存储凭据、bucket 或 object key。
+- 预签名上传采用 `PRESIGN_UPLOAD -> 客户端 PUT -> UPLOAD_COMPLETE`，生成 URL 不代表对象已正式可用。
+- 对象状态机：`PENDING_UPLOAD / AVAILABLE / DELETE_PENDING / DELETED / FAILED / EXPIRED`。
+- 删除流程：metadata 标记 `DELETE_PENDING`，删除 MinIO 对象后标记 `DELETED`。
+- 默认不允许覆盖已有 `logical_object_id`；覆盖需要 Resource Mapping 显式开启，本阶段 demo mapping 不开启。
+- 本阶段不实现 multipart；超过单次代理上传能力的大对象应使用预签名上传并在完成确认时校验。
 
-首阶段能力：对象 `GET/CREATE/DELETE/LIST`，以及受控上传会话。
+首阶段能力：对象 `CREATE/GET/EXISTS/LIST/DELETE/PRESIGN_UPLOAD/UPLOAD_COMPLETE/PRESIGN_DOWNLOAD`。
 
 ## 6. Redis Adapter
 

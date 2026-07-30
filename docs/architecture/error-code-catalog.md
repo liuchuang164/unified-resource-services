@@ -36,6 +36,9 @@
 | `OPERATION_NOT_SUPPORTED` | 422 | 否 | 目标 Adapter 不支持该操作。 |
 | `RESOURCE_TYPE_UNKNOWN` | 422 | 否 | 逻辑资源未注册。 |
 | `PAYLOAD_TOO_LARGE` | 413 | 否 | 请求体或批量超限。 |
+| `OBJECT_TOO_LARGE` | 413 | 否 | MinIO 对象超过 Resource Mapping 或全局大小上限。 |
+| `CONTENT_TYPE_NOT_ALLOWED` | 422 | 否 | Content-Type、扩展名或轻量 magic bytes 校验未通过。 |
+| `OBJECT_PATH_INVALID` | 400 | 否 | 文件名、路径或对象命名输入存在路径穿越或物理路径注入。 |
 
 ### 3.2 Authentication / Authorization
 
@@ -61,6 +64,7 @@
 | `LOCK_CONFLICT` | 409 | 是 | 锁被其他执行持有。 |
 | `LOCK_NOT_ACQUIRED` | 409 | 是 | Redis 锁未获得，通常表示同一逻辑资源已有有效租约。 |
 | `LOCK_TOKEN_MISMATCH` | 409 | 否 | 解锁 token 与当前锁 owner 不一致，禁止释放他人锁。 |
+| `OBJECT_CONFLICT` | 409 | 否 | MinIO logical_object_id 已存在且 Resource Mapping 不允许覆盖。 |
 
 ### 3.4 Routing / Adapter
 
@@ -75,6 +79,7 @@
 | `ADAPTER_RESPONSE_INVALID` | 502 | 视情况 | 下游响应不符合契约。 |
 | `DEPENDENCY_RATE_LIMITED` | 429 | 是 | 下游或本服务限流。 |
 | `CIRCUIT_OPEN` | 503 | 是 | 熔断器开启。 |
+| `PRESIGNED_URL_NOT_ALLOWED` | 403 | 否 | Resource Mapping 禁止生成对应预签名 URL。 |
 
 ### 3.5 Data / Transaction
 

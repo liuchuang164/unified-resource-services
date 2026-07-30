@@ -88,10 +88,10 @@ pytest --cov=src --cov-report=term-missing
 
 ## Adapter Implementations
 
-PostgreSQL has a real SQLAlchemy Async adapter path. Redis has a real `redis.asyncio` adapter path when enabled. MinIO, Neo4j, Milvus and TimescaleDB remain Phase 1.2 in-memory implementations with storage-specific contracts:
+PostgreSQL has a real SQLAlchemy Async adapter path. Redis has a real `redis.asyncio` adapter path when enabled. MinIO has a real official SDK adapter path when enabled. Neo4j, Milvus and TimescaleDB remain Phase 1.2 in-memory implementations with storage-specific contracts:
 
 - PostgreSQL: SQLAlchemy Core, parameterized statements, trusted Resource Mapping, tenant/domain filters, soft delete and optimistic versioning.
-- MinIO: server-side bucket mapping and generated tenant/domain object keys.
+- MinIO: official `minio` SDK behind a bounded executor, persisted object metadata, server-side bucket mapping, generated tenant/domain object keys, proxy upload, presigned upload completion and presigned download metadata.
 - Redis: server-generated key namespace, persisted Resource Mapping, TTL limits, `GET/EXISTS/UPSERT/DELETE`, token-based `LOCK/UNLOCK` and fixed compare-and-delete Lua.
 - Neo4j: node/relation stores with label and relation allowlists.
 - Milvus: vector dimension validation, metadata allowlist and cosine search.
@@ -109,12 +109,15 @@ When PostgreSQL URLs are configured, readiness also pings the control database, 
 
 When Redis is enabled, readiness also pings Redis and validates Redis Resource Mapping from the control database without returning host, port, username, password, URL or physical keys.
 
+When MinIO is enabled, readiness checks the configured bucket, the object metadata repository and the persisted MinIO Resource Mapping without returning endpoint, bucket name, credentials, object key or presigned URL.
+
 ## Non-goals
 
 - No raw SQL/Cypher/Redis command/path execution.
 - No business-domain logic.
 - No cross-adapter distributed transaction guarantee.
 - No production identity provider implementation in this phase; `development` auth is blocked when `APP_ENV=production`.
-- No real MinIO, Neo4j, Milvus or TimescaleDB driver integration yet.
+- No real Neo4j, Milvus or TimescaleDB driver integration yet.
+- No direct MinIO bucket/object-key API, raw object path passthrough, public object-key leak or multipart upload contract yet.
 - No direct Redis command API, raw Lua, Scan/Keys/Flush or Redis management command passthrough.
 - No cross-database atomicity between control-plane audit/idempotency and target data writes.
