@@ -1,3 +1,5 @@
+import logging
+
 from file_media_stream_service.application.ports.media_provider import (
     MediaProviderPort,
     StreamCoordinationPort,
@@ -16,6 +18,8 @@ from file_media_stream_service.domain.enums import (
     StreamEventType,
     StreamSessionStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class StreamLifecycleService:
@@ -75,6 +79,16 @@ class StreamLifecycleService:
     async def reconcile_scope(self, tenant_id: str, biz_domain: str) -> list[StreamSession]:
         recovered: list[StreamSession] = []
         for session in await self.sessions.list_recoverable(tenant_id, biz_domain):
+            lease = self._lease(session)
+            if not await self.coordination.heartbeat_stream(lease):
+                replacement = await self.coordination.acquire_stream_lease(
+                    session.tenant_id, session.biz_domain, session.session_id
+                )
+                if replacement is None:
+                    await self._restart_required(session)
+                    recovered.append(session)
+                    continue
+                session.fencing_token = replacement.fencing_token
             status = await self.provider.get_stream_status(
                 session.media_server_session_id, session.fencing_token
             )
@@ -87,9 +101,38 @@ class StreamLifecycleService:
                 session.last_heartbeat_at = status.last_heartbeat_at
             else:
                 await self._restart_required(session)
+                await self.coordination.release_stream(self._lease(session))
             await self.sessions.save(session)
             recovered.append(session)
         return recovered
+
+    async def reconcile_all(self) -> list[StreamSession]:
+        recovered: list[StreamSession] = []
+        for tenant_id, biz_domain in await self.sessions.list_recovery_scopes():
+            recovered.extend(await self.reconcile_scope(tenant_id, biz_domain))
+        await self.reconcile_provider_orphans()
+        return recovered
+
+    async def reconcile_provider_orphans(self) -> None:
+        records = await self.reconciliation.list_pending("STREAM_PROVIDER_ORPHAN")
+        for key, payload in records:
+            try:
+                lease = StreamLease(
+                    str(payload["tenant_id"]),
+                    str(payload["biz_domain"]),
+                    str(payload["session_id"]),
+                    int(payload["fencing_token"]),
+                )
+                await self.provider.stop_stream(
+                    str(payload["provider_session_id"]), lease.fencing_token
+                )
+                await self.coordination.release_stream(lease)
+                await self.reconciliation.resolve(key, lease.tenant_id, lease.biz_domain)
+            except Exception:
+                logger.exception(
+                    "stream provider orphan reconciliation failed",
+                    extra={"reconciliation_key": key},
+                )
 
     async def _restart_required(self, session: StreamSession) -> None:
         session.transition_to(StreamSessionStatus.FAILED)

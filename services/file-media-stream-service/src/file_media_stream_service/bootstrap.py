@@ -34,8 +34,8 @@ from file_media_stream_service.adapters.persistence.postgres import (
     PostgresFileRepository,
     PostgresHealth,
     PostgresIdempotencyStore,
+    PostgresIndependentReconciliationStore,
     PostgresProcessingJobRepository,
-    PostgresReconciliationStore,
     PostgresStreamEventSink,
     PostgresStreamSessionRepository,
     PostgresTransactionManager,
@@ -50,14 +50,18 @@ from file_media_stream_service.adapters.production_boundaries import (
     UnavailableMediaServer,
     UnavailableProcessor,
 )
+from file_media_stream_service.adapters.provisioning_compensation import (
+    StreamProvisioningCompensator,
+)
 from file_media_stream_service.adapters.readiness import ProductionReadiness
 from file_media_stream_service.application.ports.media_provider import MediaProviderPort
-from file_media_stream_service.application.use_cases import UseCases
+from file_media_stream_service.application.use_cases import StreamLifecycleService, UseCases
 from file_media_stream_service.audit import InMemoryAuditSink
 from file_media_stream_service.config import Settings
 from file_media_stream_service.entry import UnifiedEntry
 from file_media_stream_service.gateway import ToolGateway
 from file_media_stream_service.security import AuthorizationRule, FakeSecurity
+from file_media_stream_service.workers import StreamLifecycleWorker
 
 OPERATIONS = (
     "file.initialize_upload",
@@ -71,10 +75,10 @@ OPERATIONS = (
 AUTHORIZATION_ACTIONS = (
     "file.initialize_upload",
     "file.get_resource",
-    "stream:create",
-    "stream:publish",
-    "stream:subscribe",
-    "stream:close",
+    "media_stream:create",
+    "media_stream:publish",
+    "media_stream:subscribe",
+    "media_stream:close",
     "media.submit_processing_job",
     "media.get_processing_job",
 )
@@ -96,6 +100,7 @@ class Container:
     media_provider: FakeMediaProvider
     stream_coordination: InMemoryStreamCoordination
     stream_events: InMemoryStreamEventSink
+    provisioning_compensator: StreamProvisioningCompensator
 
 
 @dataclass(slots=True)
@@ -104,6 +109,9 @@ class ProductionContainer:
     gateway: ToolGateway
     transaction: PostgresTransactionManager
     readiness: ProductionReadiness
+    lifecycle: StreamLifecycleService | None = None
+    lifecycle_worker: StreamLifecycleWorker | None = None
+    provisioning_compensator: StreamProvisioningCompensator | None = None
 
 
 def build_container(settings: Settings | None = None) -> Container | ProductionContainer:
@@ -124,6 +132,9 @@ def build_container(settings: Settings | None = None) -> Container | ProductionC
     media_provider = FakeMediaProvider(media_server)
     stream_coordination = InMemoryStreamCoordination()
     stream_events = InMemoryStreamEventSink()
+    provisioning_compensator = StreamProvisioningCompensator(
+        media_provider, stream_coordination, reconciliation
+    )
     rules = tuple(
         AuthorizationRule("dev-service", "dev-tenant", "development", operation, allowed=True)
         for operation in AUTHORIZATION_ACTIONS
@@ -147,6 +158,7 @@ def build_container(settings: Settings | None = None) -> Container | ProductionC
         media_provider=media_provider,
         stream_coordination=stream_coordination,
         stream_events=stream_events,
+        provisioning_compensator=provisioning_compensator,
     )
     entry = UnifiedEntry(
         use_cases=use_cases,
@@ -175,6 +187,7 @@ def build_container(settings: Settings | None = None) -> Container | ProductionC
         media_provider=media_provider,
         stream_coordination=stream_coordination,
         stream_events=stream_events,
+        provisioning_compensator=provisioning_compensator,
     )
 
 
@@ -210,9 +223,8 @@ def build_production_container(settings: Settings) -> ProductionContainer:
         download_ttl_seconds=settings.minio_presigned_download_ttl_seconds,
     )
     clock = SystemClock()
-    reconciliation = PostgresReconciliationStore(sessions)
+    reconciliation = PostgresIndependentReconciliationStore(engine)
     durable_idempotency = PostgresIdempotencyStore(sessions)
-    idempotency = RedisCoordinatedIdempotencyStore(coordination, durable_idempotency)
     security = ExternalSecurityBoundary()
     media_provider: MediaProviderPort
     if settings.media_provider_base_url and settings.media_provider_api_token:
@@ -224,6 +236,14 @@ def build_production_container(settings: Settings) -> ProductionContainer:
     else:
         media_provider = UnavailableMediaProvider()
     stream_events = PostgresStreamEventSink(sessions)
+    provisioning_compensator = StreamProvisioningCompensator(
+        media_provider, coordination, reconciliation
+    )
+    idempotency = RedisCoordinatedIdempotencyStore(
+        coordination,
+        durable_idempotency,
+        on_durable_complete=provisioning_compensator.clear,
+    )
     use_cases = UseCases(
         files=PostgresFileRepository(sessions),
         sessions=PostgresStreamSessionRepository(sessions),
@@ -239,6 +259,8 @@ def build_production_container(settings: Settings) -> ProductionContainer:
         media_provider=media_provider,
         stream_coordination=coordination,
         stream_events=stream_events,
+        transactions=transaction,
+        provisioning_compensator=provisioning_compensator,
     )
     entry = UnifiedEntry(
         use_cases=use_cases,
@@ -257,11 +279,24 @@ def build_production_container(settings: Settings) -> ProductionContainer:
         redis=coordination,
         minio=minio,
     )
+    lifecycle = StreamLifecycleService(
+        sessions=PostgresStreamSessionRepository(sessions),
+        provider=media_provider,
+        coordination=coordination,
+        events=stream_events,
+        reconciliation=reconciliation,
+        clock=clock,
+        ids=UuidIdentifierFactory(),
+    )
+    lifecycle_worker = StreamLifecycleWorker(lifecycle, transactions=transaction)
     return ProductionContainer(
         entry=entry,
         gateway=ToolGateway(entry),
         transaction=transaction,
         readiness=readiness,
+        lifecycle=lifecycle,
+        lifecycle_worker=lifecycle_worker,
+        provisioning_compensator=provisioning_compensator,
     )
 
 
