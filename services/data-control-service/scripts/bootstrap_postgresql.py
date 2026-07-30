@@ -226,9 +226,12 @@ async def main() -> None:
                         PolicyBindingModel.tenant_id == "tenant_demo",
                         PolicyBindingModel.biz_domain == "demo",
                         PolicyBindingModel.subject_pattern == "*",
+                        PolicyBindingModel.target == "POSTGRESQL",
+                        PolicyBindingModel.resource_type == "DOCUMENT_RECORD",
+                        PolicyBindingModel.resource_name == "record",
                         PolicyBindingModel.effect == "ALLOW",
                         PolicyBindingModel.enabled.is_(True),
-                    )
+                    ).limit(1)
                 )
                 if policy_exists.scalar_one_or_none() is None:
                     session.add(
@@ -262,7 +265,7 @@ async def main() -> None:
                         PolicyBindingModel.resource_name == "cache",
                         PolicyBindingModel.effect == "ALLOW",
                         PolicyBindingModel.enabled.is_(True),
-                    )
+                    ).limit(1)
                 )
                 if redis_policy_exists.scalar_one_or_none() is None:
                     session.add(
@@ -296,7 +299,7 @@ async def main() -> None:
                         PolicyBindingModel.resource_name == "asset",
                         PolicyBindingModel.effect == "ALLOW",
                         PolicyBindingModel.enabled.is_(True),
-                    )
+                    ).limit(1)
                 )
                 if minio_policy_exists.scalar_one_or_none() is None:
                     session.add(
