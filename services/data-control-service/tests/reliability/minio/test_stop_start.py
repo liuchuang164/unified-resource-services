@@ -69,7 +69,8 @@ async def test_minio_stop_start_readiness_and_recovery() -> None:
         live = await client.get("/health/live")
         not_ready = await client.get("/health/ready")
         failed = await client.post(
-            "/data/dispatch", json=_request("PRESIGN_DOWNLOAD", {"logical_object_id": object_id})
+            "/data/dispatch",
+            json=_request("CREATE", _txt_payload("offline.txt"), f"idem_{uuid4().hex}"),
         )
         assert live.status_code == 200
         assert not_ready.status_code == 503
@@ -84,6 +85,10 @@ async def test_minio_stop_start_readiness_and_recovery() -> None:
         assert recovered.status_code == 200
         recovered_operation = await client.post(
             "/data/dispatch",
-            json=_request("PRESIGN_DOWNLOAD", {"logical_object_id": object_id}),
+            json=_request("CREATE", _txt_payload("recovered.txt"), f"idem_{uuid4().hex}"),
         )
         assert recovered_operation.status_code == 200
+        get = await client.post(
+            "/data/dispatch", json=_request("GET", {"logical_object_id": object_id})
+        )
+        assert get.status_code == 200
