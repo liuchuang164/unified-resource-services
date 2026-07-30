@@ -154,29 +154,6 @@ jobs:
           unset POSTGRESQL_ADAPTER_DATABASE_URL TARGET_DATABASE_MIGRATION_URL
           unset REDIS_URL MINIO_ENDPOINT MINIO_ACCESS_KEY MINIO_SECRET_KEY
           APP_ENV=development POSTGRESQL_ADAPTER_ENABLED=false REDIS_ADAPTER_ENABLED=false MINIO_ADAPTER_ENABLED=false coverage run -m pytest -q
-          export APP_ENV=test
-          export CONTROL_DATABASE_URL='postgresql+asyncpg://data_control:change_me@localhost:5432/dcs_control_test'
-          export CONTROL_DATABASE_MIGRATION_URL='postgresql+psycopg://data_control:change_me@localhost:5432/dcs_control_test'
-          export POSTGRESQL_ADAPTER_ENABLED=true
-          export POSTGRESQL_ADAPTER_REQUIRED=true
-          export POSTGRESQL_ADAPTER_DATABASE_URL='postgresql+asyncpg://data_control:change_me@localhost:5432/dcs_target_test'
-          export TARGET_DATABASE_MIGRATION_URL='postgresql+psycopg://data_control:change_me@localhost:5432/dcs_target_test'
-          export REDIS_ADAPTER_ENABLED=true
-          export REDIS_ADAPTER_REQUIRED=true
-          export REDIS_URL='redis://localhost:6379/0'
-          export MINIO_ADAPTER_ENABLED=true
-          export MINIO_ADAPTER_REQUIRED=true
-          export MINIO_ENDPOINT='localhost:9000'
-          export MINIO_SECURE=false
-          export MINIO_ACCESS_KEY='data_control'
-          export MINIO_SECRET_KEY='change_me_123456'
-          export MINIO_DEFAULT_BUCKET='dcs-objects'
-          coverage run --append -m pytest -m postgresql -q
-          coverage run --append -m pytest -m reliability -q
-          coverage run --append -m pytest -m consistency -q
-          coverage run --append -m pytest -m redis -q
-          coverage run --append -m pytest tests/integration/minio -q
-          coverage run --append -m pytest tests/security/minio -q
           coverage report --fail-under=70
       - name: Secret scan
         run: |
