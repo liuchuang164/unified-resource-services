@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from data_control_service.adapters.base import AdapterHealth, DataAdapter
 from data_control_service.adapters.milvus import InMemoryMilvusAdapter
-from data_control_service.adapters.minio import InMemoryMinIOAdapter
+from data_control_service.adapters.minio import InMemoryMinIOAdapter, MinIOObjectAdapter
 from data_control_service.adapters.neo4j import InMemoryNeo4jAdapter
 from data_control_service.adapters.postgresql import (
     InMemoryPostgreSQLAdapter,
@@ -15,6 +15,10 @@ from data_control_service.adapters.timescaledb import InMemoryTimescaleDBAdapter
 from data_control_service.config.settings import Settings
 from data_control_service.contracts.enums import DataTarget
 from data_control_service.domain.exceptions import DataControlError
+from data_control_service.infrastructure.minio.executor import MinIOExecutor
+from data_control_service.infrastructure.persistence.repositories.sqlalchemy_object_record import (
+    SQLAlchemyObjectRecordRepository,
+)
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,9 @@ def create_default_registry(
     settings: Settings | None = None,
     postgresql_session_factory: async_sessionmaker[AsyncSession] | None = None,
     redis_client: object | None = None,
+    minio_client: object | None = None,
+    minio_executor: MinIOExecutor | None = None,
+    object_repository: SQLAlchemyObjectRecordRepository | None = None,
 ) -> AdapterRegistry:
     settings = settings or Settings()
     postgresql_adapter = (
@@ -82,12 +89,25 @@ def create_default_registry(
         if settings.redis_adapter_enabled and redis_client is not None
         else InMemoryRedisAdapter(settings.redis_max_ttl_seconds)
     )
+    minio_adapter = (
+        MinIOObjectAdapter(
+            client=minio_client,  # type: ignore[arg-type]
+            executor=minio_executor,
+            object_repository=object_repository,
+            settings=settings,
+        )
+        if settings.minio_adapter_enabled
+        and minio_client is not None
+        and minio_executor is not None
+        and object_repository is not None
+        else InMemoryMinIOAdapter(
+            settings.max_object_size_bytes, settings.max_presigned_url_ttl_seconds
+        )
+    )
     return AdapterRegistry(
         [
             postgresql_adapter,
-            InMemoryMinIOAdapter(
-                settings.max_object_size_bytes, settings.max_presigned_url_ttl_seconds
-            ),
+            minio_adapter,
             redis_adapter,
             InMemoryNeo4jAdapter(),
             InMemoryMilvusAdapter(settings.max_vector_top_k),

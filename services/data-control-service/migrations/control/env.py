@@ -15,6 +15,7 @@ from data_control_service.infrastructure.persistence.models.change_audit import 
 from data_control_service.infrastructure.persistence.models.idempotency import (
     IdempotencyRecordModel,
 )
+from data_control_service.infrastructure.persistence.models.object_record import ObjectRecordModel
 from data_control_service.infrastructure.persistence.models.policy_binding import (
     PolicyBindingModel,
 )
@@ -27,6 +28,7 @@ _CONTROL_MODELS = (
     AuditOutboxModel,
     ChangeAuditLogModel,
     IdempotencyRecordModel,
+    ObjectRecordModel,
     PolicyBindingModel,
     ResourceMappingModel,
 )

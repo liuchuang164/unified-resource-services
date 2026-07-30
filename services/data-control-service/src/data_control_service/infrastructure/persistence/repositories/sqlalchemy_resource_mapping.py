@@ -88,6 +88,43 @@ class SQLAlchemyResourceMappingRepository(ResourceMappingRepository):
                     "allow_permanent_keys": config.get("allow_permanent_keys", False),
                 },
             )
+        if DataTarget(model.target) == DataTarget.MINIO:
+            config = dict(model.physical_config or {})
+            return ResourceMapping(
+                tenant_id=model.tenant_id,
+                biz_domain=model.biz_domain,
+                definition=ResourceDefinition(
+                    resource_type=model.resource_type,
+                    logical_name=model.resource_name,
+                    target=DataTarget.MINIO,
+                    allowed_operations=operations,
+                    read_permission=f"data:{model.resource_name}:read",
+                    write_permission=f"data:{model.resource_name}:write",
+                    high_risk_operations=frozenset({Operation.DELETE}),
+                    data_constraints={
+                        "allowed_content_types": config.get("allowed_content_types", []),
+                        "allowed_extensions": config.get("allowed_extensions", []),
+                        "max_object_size_bytes": config.get("max_object_size_bytes"),
+                        "metadata_allowlist": config.get("metadata_allowlist", []),
+                    },
+                ),
+                physical_mapping={
+                    "bucket_name": config.get("bucket_name", model.physical_schema),
+                    "object_prefix_template": config.get("object_prefix_template"),
+                    "allowed_content_types": config.get("allowed_content_types", []),
+                    "allowed_extensions": config.get("allowed_extensions", []),
+                    "max_object_size_bytes": config.get("max_object_size_bytes"),
+                    "allow_overwrite": config.get("allow_overwrite", False),
+                    "allow_presigned_upload": config.get("allow_presigned_upload", True),
+                    "allow_presigned_download": config.get("allow_presigned_download", True),
+                    "default_upload_url_ttl_seconds": config.get("default_upload_url_ttl_seconds"),
+                    "default_download_url_ttl_seconds": config.get(
+                        "default_download_url_ttl_seconds"
+                    ),
+                    "max_presigned_ttl_seconds": config.get("max_presigned_ttl_seconds"),
+                    "metadata_allowlist": config.get("metadata_allowlist", []),
+                },
+            )
         write_operations = {
             Operation.CREATE,
             Operation.UPDATE,

@@ -19,6 +19,9 @@ class Operation(StrEnum):
     GET = "GET"
     EXISTS = "EXISTS"
     LIST = "LIST"
+    PRESIGN_UPLOAD = "PRESIGN_UPLOAD"
+    UPLOAD_COMPLETE = "UPLOAD_COMPLETE"
+    PRESIGN_DOWNLOAD = "PRESIGN_DOWNLOAD"
     SEARCH = "SEARCH"
     CREATE = "CREATE"
     UPDATE = "UPDATE"
@@ -62,4 +65,6 @@ WRITE_OPERATIONS = {
     Operation.BATCH,
     Operation.LOCK,
     Operation.UNLOCK,
+    Operation.PRESIGN_UPLOAD,
+    Operation.UPLOAD_COMPLETE,
 }

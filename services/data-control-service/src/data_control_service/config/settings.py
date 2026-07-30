@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     auth_provider: str = "development"
     control_database_url: str | None = None
     control_database_migration_url: str | None = None
-    control_migration_head_revision: str = "0006"
+    control_migration_head_revision: str = "0007"
     postgresql_adapter_enabled: bool = False
     postgresql_adapter_required: bool = True
     postgresql_adapter_database_url: str | None = None
@@ -37,6 +37,29 @@ class Settings(BaseSettings):
     redis_key_prefix: str = Field(default="dcs", min_length=1, max_length=32)
     redis_scan_disabled: bool = True
     redis_max_value_bytes: int = Field(default=65_536, ge=1)
+    minio_adapter_enabled: bool = False
+    minio_adapter_required: bool = True
+    minio_endpoint: str | None = None
+    minio_secure: bool = False
+    minio_access_key: str | None = None
+    minio_secret_key: str | None = None
+    minio_connect_timeout_seconds: float = Field(default=3.0, gt=0)
+    minio_read_timeout_seconds: float = Field(default=30.0, gt=0)
+    minio_max_concurrency: int = Field(default=20, ge=1)
+    minio_default_bucket: str = Field(default="dcs-objects", min_length=3, max_length=63)
+    minio_auto_create_buckets: bool = False
+    minio_max_object_size_bytes: int = Field(default=52_428_800, ge=1)
+    minio_default_presigned_upload_ttl_seconds: int = Field(default=900, ge=1)
+    minio_default_presigned_download_ttl_seconds: int = Field(default=300, ge=1)
+    minio_max_presigned_ttl_seconds: int = Field(default=3600, ge=1)
+    minio_allowed_content_types: str = (
+        "application/pdf,image/png,image/jpeg,text/plain,application/json,"
+        "audio/mpeg,audio/wav,video/mp4"
+    )
+    minio_allowed_extensions: str = ".pdf,.png,.jpg,.jpeg,.txt,.json,.mp3,.wav,.mp4"
+    minio_multipart_threshold_bytes: int = Field(default=10_485_760, ge=1)
+    minio_multipart_part_size_bytes: int = Field(default=5_242_880, ge=1)
+    minio_pending_upload_expiry_seconds: int = Field(default=3600, ge=60)
     idempotency_processing_timeout_seconds: int = Field(default=120, ge=1)
     idempotency_recovery_max_attempts: int = Field(default=3, ge=1, le=10)
     audit_enabled: bool = True

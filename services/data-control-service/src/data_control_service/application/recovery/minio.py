@@ -1,0 +1,2 @@
+MINIO_RECOVERY_STRATEGY = "minio_object_metadata_reference_replay"
+

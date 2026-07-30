@@ -60,6 +60,9 @@ class Payload(BaseModel):
             "connection_string",
             "bucket",
             "object_key",
+            "physical_path",
+            "local_path",
+            "filesystem_path",
             "path",
             "schema",
             "table",
@@ -68,6 +71,10 @@ class Payload(BaseModel):
             "join_sql",
             "database_url",
             "redis_url",
+            "minio_url",
+            "endpoint",
+            "access_key",
+            "secret_key",
             "host",
             "port",
             "password",
@@ -93,6 +100,7 @@ class Payload(BaseModel):
             "slaveof",
             "cluster",
             "select",
+            "bucket_name",
         }
         for section_name, section in (
             ("data", self.data),

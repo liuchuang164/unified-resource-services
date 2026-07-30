@@ -15,6 +15,7 @@ dependencies = [
   "greenlet>=3.0.0",
   "psycopg[binary]>=3.2.0",
   "redis[hiredis]>=5.0.0",
+  "minio>=7.2.0",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +45,7 @@ markers = [
   "reliability: exercises real PostgreSQL reliability behavior",
   "consistency: exercises outbox and idempotency recovery consistency behavior",
   "redis: requires a real Redis 7 server",
+  "minio: requires a real MinIO server",
 ]
 
 [tool.ruff]

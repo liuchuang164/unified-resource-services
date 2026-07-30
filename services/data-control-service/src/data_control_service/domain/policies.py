@@ -88,17 +88,41 @@ def create_default_resource_registry() -> ResourceRegistry:
                     logical_name="asset",
                     target=DataTarget.MINIO,
                     allowed_operations=frozenset(
-                        {Operation.GET, Operation.LIST, Operation.CREATE, Operation.DELETE}
+                        {
+                            Operation.GET,
+                            Operation.EXISTS,
+                            Operation.LIST,
+                            Operation.CREATE,
+                            Operation.PRESIGN_UPLOAD,
+                            Operation.UPLOAD_COMPLETE,
+                            Operation.PRESIGN_DOWNLOAD,
+                            Operation.DELETE,
+                        }
                     ),
                     read_permission="data:object:read",
                     write_permission="data:object:write",
                     high_risk_operations=frozenset({Operation.DELETE}),
                     data_constraints={
                         "bucket": "dcs-object-assets",
-                        "allowed_content_types": ["text/plain", "application/json"],
+                        "allowed_content_types": ["text/plain", "application/json", "image/png"],
+                        "allowed_extensions": [".txt", ".json", ".png"],
+                        "max_object_size_bytes": 10_485_760,
                     },
                 ),
-                physical_mapping={"bucket": "dcs-object-assets"},
+                physical_mapping={
+                    "bucket_name": "dcs-object-assets",
+                    "object_prefix_template": (
+                        "tenant/{tenant_id}/{biz_domain}/{resource_name}/"
+                        "{yyyy}/{mm}/{logical_object_id}/{safe_filename}"
+                    ),
+                    "allowed_content_types": ["text/plain", "application/json", "image/png"],
+                    "allowed_extensions": [".txt", ".json", ".png"],
+                    "max_object_size_bytes": 10_485_760,
+                    "allow_overwrite": False,
+                    "allow_presigned_upload": True,
+                    "allow_presigned_download": True,
+                    "metadata_allowlist": ["description", "tags"],
+                },
             ),
             ResourceMapping(
                 tenant_id="tenant_demo",

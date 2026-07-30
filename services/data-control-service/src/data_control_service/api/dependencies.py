@@ -20,6 +20,7 @@ from data_control_service.infrastructure.auth.development_auth_provider import (
     DevelopmentAuthProvider,
 )
 from data_control_service.infrastructure.idempotency.in_memory import InMemoryIdempotencyRepository
+from data_control_service.infrastructure.minio.manager import MinIOManager
 from data_control_service.infrastructure.persistence.database import (
     DatabaseManager,
     require_database_url,
@@ -28,6 +29,7 @@ from data_control_service.infrastructure.persistence.repositories import (
     SQLAlchemyAuditOutboxRepository,
     SQLAlchemyAuditRepository,
     SQLAlchemyIdempotencyRepository,
+    SQLAlchemyObjectRecordRepository,
     SQLAlchemyPolicyRepository,
     SQLAlchemyResourceMappingRepository,
 )
@@ -81,6 +83,18 @@ def get_redis_manager() -> RedisManager | None:
     return RedisManager(settings)
 
 
+@lru_cache
+def get_minio_manager() -> MinIOManager | None:
+    settings = get_settings()
+    if not settings.minio_adapter_enabled:
+        return None
+    if not settings.minio_endpoint:
+        if settings.minio_adapter_required or settings.app_env in {"production", "test"}:
+            raise DataControlError("CONFIGURATION_INVALID", "MINIO_ENDPOINT is required")
+        return None
+    return MinIOManager(settings)
+
+
 async def close_database_managers() -> None:
     control_database = get_control_database_manager()
     target_database = get_target_postgresql_manager()
@@ -91,10 +105,14 @@ async def close_database_managers() -> None:
     redis_manager = get_redis_manager()
     if redis_manager is not None:
         await redis_manager.close()
+    minio_manager = get_minio_manager()
+    if minio_manager is not None:
+        await minio_manager.close()
     get_data_control_service.cache_clear()
     get_control_database_manager.cache_clear()
     get_target_postgresql_manager.cache_clear()
     get_redis_manager.cache_clear()
+    get_minio_manager.cache_clear()
 
 
 @lru_cache
@@ -103,6 +121,7 @@ def get_data_control_service() -> DataControlService:
     control_database = get_control_database_manager()
     target_database = get_target_postgresql_manager()
     redis_manager = get_redis_manager()
+    minio_manager = get_minio_manager()
     audit_repository: AuditRepository | InMemoryAuditService
     if control_database is not None:
         resource_repository: ResourceMappingRepository = SQLAlchemyResourceMappingRepository(
@@ -117,6 +136,9 @@ def get_data_control_service() -> DataControlService:
         )
         audit_repository = SQLAlchemyAuditRepository(control_database.session_factory)
         audit_outbox_repository = SQLAlchemyAuditOutboxRepository(control_database.session_factory)
+        object_record_repository = SQLAlchemyObjectRecordRepository(
+            control_database.session_factory
+        )
         audit_service: AuditRepository | InMemoryAuditService | AuditOutboxService = (
             AuditOutboxService(audit_outbox_repository, settings)
         )
@@ -126,6 +148,7 @@ def get_data_control_service() -> DataControlService:
         idempotency_repository = InMemoryIdempotencyRepository()
         audit_repository = InMemoryAuditService()
         audit_service = audit_repository
+        object_record_repository = None
     readiness_checks: dict[str, Callable[[], Awaitable[dict[str, str]]]] = {}
     if control_database is not None:
         readiness_checks["control_database"] = control_database.ping
@@ -173,6 +196,36 @@ def get_data_control_service() -> DataControlService:
 
         readiness_checks["redis_resource_mapping"] = redis_mapping_health
         redis_client = redis_manager.client()
+    minio_client = None
+    minio_executor = None
+    if minio_manager is not None:
+        readiness_checks["minio_connection"] = minio_manager.health
+        if object_record_repository is not None:
+            readiness_checks["minio_object_metadata_repository"] = object_record_repository.health
+
+        async def minio_mapping_health() -> dict[str, str]:
+            async_getter = getattr(resource_repository, "get_mapping_async", None)
+            if async_getter is not None:
+                mapping = await async_getter(
+                    tenant_id="tenant_demo",
+                    biz_domain="demo",
+                    target=DataTarget.MINIO,
+                    resource_type="OBJECT_ASSET",
+                    logical_name="asset",
+                )
+            else:
+                mapping = resource_repository.get_mapping(
+                    tenant_id="tenant_demo",
+                    biz_domain="demo",
+                    target=DataTarget.MINIO,
+                    resource_type="OBJECT_ASSET",
+                    logical_name="asset",
+                )
+            return {"status": "ok" if mapping is not None else "error"}
+
+        readiness_checks["minio_bucket_mapping"] = minio_mapping_health
+        minio_client = minio_manager.client()
+        minio_executor = minio_manager.executor()
     return DataControlService(
         context_resolver=ContextResolver(),
         authorization_service=AuthorizationService(policy_repository),
@@ -183,6 +236,9 @@ def get_data_control_service() -> DataControlService:
             settings,
             target_database.session_factory if target_database is not None else None,
             redis_client,
+            minio_client,
+            minio_executor,
+            object_record_repository,
         ),
         audit_service=audit_service,
         readiness_checks=readiness_checks,

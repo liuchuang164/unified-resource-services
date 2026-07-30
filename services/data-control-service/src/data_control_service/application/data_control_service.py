@@ -7,8 +7,10 @@ from data_control_service.application.audit_service import InMemoryAuditService
 from data_control_service.application.authorization_service import AuthorizationService
 from data_control_service.application.context_resolver import ContextResolver
 from data_control_service.application.idempotency_service import IdempotencyService
+from data_control_service.application.recovery.minio import MINIO_RECOVERY_STRATEGY
 from data_control_service.application.routing_service import RoutingService
 from data_control_service.application.transaction_orchestrator import TransactionOrchestrator
+from data_control_service.contracts.enums import DataTarget
 from data_control_service.contracts.request import DataRequest
 from data_control_service.contracts.response import DataResponse, PageInfo
 from data_control_service.domain.exceptions import DataControlError
@@ -121,7 +123,7 @@ class DataControlService:
                     idempotency_record_id,
                     request,
                     business_result_reference=recovery_reference,
-                    recovery_strategy="postgresql_result_reference_replay",
+                    recovery_strategy=self._recovery_strategy(route),
                     recovery_metadata={
                         "response_snapshot": response.model_dump(mode="json"),
                         "failure_type": type(exc).__name__,
@@ -198,7 +200,12 @@ class DataControlService:
     ) -> dict[str, object]:
         data = result.data if isinstance(result.data, dict) else {}
         external_id = data.get("external_id") or request.payload.data.get("external_id")
-        resource_id = data.get("resource_id") or request.resource.resource_id
+        resource_id = (
+            data.get("resource_id")
+            or data.get("logical_object_id")
+            or request.payload.data.get("logical_object_id")
+            or request.resource.resource_id
+        )
         return {
             "tenant_id": context.tenant_id,
             "biz_domain": context.biz_domain,
@@ -212,6 +219,14 @@ class DataControlService:
             "resource_version": result.resource_version,
             "affected_count": result.affected_count,
         }
+
+    @staticmethod
+    def _recovery_strategy(route: RouteDecision) -> str:
+        if route.target == DataTarget.MINIO:
+            return MINIO_RECOVERY_STRATEGY
+        if route.target == DataTarget.REDIS:
+            return "redis_result_reference_replay"
+        return "postgresql_result_reference_replay"
 
     async def readiness(self) -> dict[str, object]:
         registry_validation = await self._adapter_registry.validate()
@@ -248,6 +263,11 @@ class DataControlService:
             }
             if target.value == "REDIS":
                 components["redis_adapter"] = {
+                    "status": "ok" if ok else "error",
+                    "required": health.required,
+                }
+            if target.value == "MINIO":
+                components["minio_adapter"] = {
                     "status": "ok" if ok else "error",
                     "required": health.required,
                 }

@@ -37,6 +37,15 @@ ERROR_CATALOG: dict[str, ErrorSpec] = {
         422, False, ErrorCategory.CONTRACT, "resource type is unknown"
     ),
     "PAYLOAD_TOO_LARGE": ErrorSpec(413, False, ErrorCategory.CONTRACT, "payload is too large"),
+    "OBJECT_TOO_LARGE": ErrorSpec(413, False, ErrorCategory.CONTRACT, "object is too large"),
+    "CONTENT_TYPE_NOT_ALLOWED": ErrorSpec(
+        422, False, ErrorCategory.CONTRACT, "content type is not allowed"
+    ),
+    "OBJECT_PATH_INVALID": ErrorSpec(400, False, ErrorCategory.CONTRACT, "object path is invalid"),
+    "OBJECT_CONFLICT": ErrorSpec(409, False, ErrorCategory.DATA, "object conflict"),
+    "PRESIGNED_URL_NOT_ALLOWED": ErrorSpec(
+        403, False, ErrorCategory.AUTHORIZATION, "presigned url is not allowed"
+    ),
     "AUTH_REQUIRED": ErrorSpec(
         401, False, ErrorCategory.AUTHENTICATION, "authentication is required"
     ),

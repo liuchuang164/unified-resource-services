@@ -137,6 +137,90 @@ async def main() -> None:
                             updated_at=now,
                         )
                     )
+                minio_mapping_exists = await session.execute(
+                    select(ResourceMappingModel.id).where(
+                        ResourceMappingModel.tenant_id == "tenant_demo",
+                        ResourceMappingModel.biz_domain == "demo",
+                        ResourceMappingModel.target == "MINIO",
+                        ResourceMappingModel.resource_type == "OBJECT_ASSET",
+                        ResourceMappingModel.resource_name == "asset",
+                        ResourceMappingModel.enabled.is_(True),
+                    )
+                )
+                if minio_mapping_exists.scalar_one_or_none() is None:
+                    session.add(
+                        ResourceMappingModel(
+                            id=f"resmap_{uuid4().hex}",
+                            tenant_id="tenant_demo",
+                            biz_domain="demo",
+                            target="MINIO",
+                            resource_type="OBJECT_ASSET",
+                            resource_name="asset",
+                            physical_schema=settings.minio_default_bucket,
+                            physical_table="objects",
+                            primary_key_column="logical_object_id",
+                            tenant_column="tenant_id",
+                            biz_domain_column="biz_domain",
+                            allowed_operations=[
+                                "GET",
+                                "EXISTS",
+                                "LIST",
+                                "CREATE",
+                                "PRESIGN_UPLOAD",
+                                "UPLOAD_COMPLETE",
+                                "PRESIGN_DOWNLOAD",
+                                "DELETE",
+                            ],
+                            upsert_conflict_columns=[],
+                            field_allowlist=[
+                                "logical_object_id",
+                                "filename",
+                                "content_type",
+                                "size_bytes",
+                                "content_base64",
+                                "content_text",
+                                "metadata",
+                            ],
+                            filter_allowlist=["status", "content_type"],
+                            sort_allowlist=["created_at", "updated_at"],
+                            physical_config={
+                                "bucket_name": settings.minio_default_bucket,
+                                "object_prefix_template": (
+                                    "tenant/{tenant_id}/{biz_domain}/{resource_name}/"
+                                    "{yyyy}/{mm}/{logical_object_id}/{safe_filename}"
+                                ),
+                                "allowed_content_types": [
+                                    item.strip()
+                                    for item in settings.minio_allowed_content_types.split(",")
+                                    if item.strip()
+                                ],
+                                "allowed_extensions": [
+                                    item.strip()
+                                    for item in settings.minio_allowed_extensions.split(",")
+                                    if item.strip()
+                                ],
+                                "max_object_size_bytes": settings.minio_max_object_size_bytes,
+                                "allow_overwrite": False,
+                                "allow_presigned_upload": True,
+                                "allow_presigned_download": True,
+                                "default_upload_url_ttl_seconds": (
+                                    settings.minio_default_presigned_upload_ttl_seconds
+                                ),
+                                "default_download_url_ttl_seconds": (
+                                    settings.minio_default_presigned_download_ttl_seconds
+                                ),
+                                "max_presigned_ttl_seconds": (
+                                    settings.minio_max_presigned_ttl_seconds
+                                ),
+                                "metadata_allowlist": ["description", "tags"],
+                            },
+                            max_page_size=100,
+                            enabled=True,
+                            version=1,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
                 policy_exists = await session.execute(
                     select(PolicyBindingModel.id).where(
                         PolicyBindingModel.tenant_id == "tenant_demo",
@@ -195,6 +279,40 @@ async def main() -> None:
                             target="REDIS",
                             resource_type="CACHE_ENTRY",
                             resource_name="cache",
+                            effect="ALLOW",
+                            constraints={},
+                            priority=100,
+                            enabled=True,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                minio_policy_exists = await session.execute(
+                    select(PolicyBindingModel.id).where(
+                        PolicyBindingModel.tenant_id == "tenant_demo",
+                        PolicyBindingModel.biz_domain == "demo",
+                        PolicyBindingModel.target == "MINIO",
+                        PolicyBindingModel.resource_type == "OBJECT_ASSET",
+                        PolicyBindingModel.resource_name == "asset",
+                        PolicyBindingModel.effect == "ALLOW",
+                        PolicyBindingModel.enabled.is_(True),
+                    )
+                )
+                if minio_policy_exists.scalar_one_or_none() is None:
+                    session.add(
+                        PolicyBindingModel(
+                            id=f"policy_{uuid4().hex}",
+                            tenant_id="tenant_demo",
+                            biz_domain="demo",
+                            subject_type="SERVICE",
+                            subject_pattern="*",
+                            role=None,
+                            permission=None,
+                            source=None,
+                            operation=None,
+                            target="MINIO",
+                            resource_type="OBJECT_ASSET",
+                            resource_name="asset",
                             effect="ALLOW",
                             constraints={},
                             priority=100,
