@@ -155,15 +155,15 @@ class UnifiedEntry:
         if operation == "media.create_stream_session":
             direction = str(payload.get("direction", ""))
             data_actions = {
-                "INGRESS": ("stream:publish",),
-                "EGRESS": ("stream:subscribe",),
-                "BIDIRECTIONAL": ("stream:publish", "stream:subscribe"),
+                "INGRESS": ("media_stream:publish",),
+                "EGRESS": ("media_stream:subscribe",),
+                "BIDIRECTIONAL": ("media_stream:publish", "media_stream:subscribe"),
             }
-            return ("stream:create", *data_actions.get(direction, ()))
+            return ("media_stream:create", *data_actions.get(direction, ()))
         if operation == "media.get_stream_session":
-            return ("stream:subscribe",)
+            return ("media_stream:subscribe",)
         if operation == "media.close_stream_session":
-            return ("stream:close",)
+            return ("media_stream:close",)
         return (operation,)
 
     @staticmethod
