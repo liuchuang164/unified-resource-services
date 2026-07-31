@@ -21,6 +21,9 @@ FILE_TRANSITIONS: dict[FileResourceStatus, frozenset[FileResourceStatus]] = {
         {FileResourceStatus.UPLOADING, FileResourceStatus.FAILED}
     ),
     FileResourceStatus.UPLOADING: frozenset(
+        {FileResourceStatus.VERIFYING, FileResourceStatus.FAILED}
+    ),
+    FileResourceStatus.VERIFYING: frozenset(
         {FileResourceStatus.AVAILABLE, FileResourceStatus.FAILED}
     ),
     FileResourceStatus.AVAILABLE: frozenset(
@@ -124,6 +127,48 @@ class FileResource:
     def transition_to(self, target: FileResourceStatus) -> None:
         self.status = _transition(self.status, target, FILE_TRANSITIONS)
         self.updated_at = utc_now()
+
+
+@dataclass(frozen=True, slots=True)
+class FileResourceVersion:
+    version_id: str
+    resource_id: str
+    tenant_id: str
+    biz_domain: str
+    version: int
+    object_key: str
+    size_bytes: int
+    checksum: str
+    status: FileResourceStatus
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass(slots=True)
+class FileUploadSession:
+    upload_id: str
+    resource_id: str
+    tenant_id: str
+    biz_domain: str
+    provider_upload_id: str
+    upload_reference: str
+    expires_at: datetime
+    completed: bool = False
+    aborted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class RangeAccessGrant:
+    reference_id: str
+    resource_id: str
+    tenant_id: str
+    biz_domain: str
+    caller_id: str
+    caller_type: str
+    request_id: str
+    trace_id: str
+    offset: int
+    length: int
+    expires_at: datetime
 
 
 @dataclass(slots=True)
@@ -260,3 +305,5 @@ class AuditEvent:
     error_code: str | None
     duration_ms: int
     created_at: datetime
+    offset: int | None = None
+    length: int | None = None

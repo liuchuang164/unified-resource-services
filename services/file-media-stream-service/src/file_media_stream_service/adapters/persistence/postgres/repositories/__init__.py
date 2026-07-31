@@ -1,6 +1,8 @@
 from .core import (
     PostgresAuditSink,
     PostgresFileRepository,
+    PostgresFileUploadSessionRepository,
+    PostgresFileVersionRepository,
     PostgresIdempotencyStore,
     PostgresIndependentReconciliationStore,
     PostgresProcessingJobRepository,
@@ -12,6 +14,8 @@ from .core import (
 __all__ = [
     "PostgresAuditSink",
     "PostgresFileRepository",
+    "PostgresFileUploadSessionRepository",
+    "PostgresFileVersionRepository",
     "PostgresIdempotencyStore",
     "PostgresIndependentReconciliationStore",
     "PostgresProcessingJobRepository",

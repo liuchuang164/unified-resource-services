@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import (
 from file_media_stream_service.domain.entities import (
     AuditEvent,
     FileResource,
+    FileResourceVersion,
+    FileUploadSession,
     ProcessingJob,
     StreamEvent,
     StreamSession,
@@ -30,6 +32,8 @@ from file_media_stream_service.domain.exceptions import IdempotencyConflict
 from ..models import (
     AuditEventRow,
     FileResourceRow,
+    FileResourceVersionRow,
+    FileUploadSessionRow,
     IdempotencyRecordRow,
     ProcessingJobRow,
     ReconciliationRecordRow,
@@ -102,6 +106,138 @@ class PostgresFileRepository:
                 FileResourceRow.tenant_id == tenant_id,
                 FileResourceRow.biz_domain == biz_domain,
                 FileResourceRow.resource_id == resource_id,
+            )
+        )
+
+    async def save(self, value: FileResource) -> None:
+        row = await self.sessions().scalar(
+            select(FileResourceRow).where(
+                FileResourceRow.tenant_id == value.tenant_id,
+                FileResourceRow.biz_domain == value.biz_domain,
+                FileResourceRow.resource_id == value.resource_id,
+            )
+        )
+        if row is None:
+            await self.add(value)
+            return
+        row.size_bytes = value.size_bytes
+        row.sha256 = value.sha256
+        row.status = value.status.value
+        row.version = value.version
+        row.updated_at = value.updated_at
+        await self.sessions().flush()
+
+
+class PostgresFileVersionRepository:
+    def __init__(self, sessions: async_scoped_session[AsyncSession]) -> None:
+        self.sessions = sessions
+
+    async def add(self, value: FileResourceVersion) -> None:
+        self.sessions().add(
+            FileResourceVersionRow(
+                version_id=value.version_id,
+                resource_id=value.resource_id,
+                tenant_id=value.tenant_id,
+                biz_domain=value.biz_domain,
+                version=value.version,
+                object_key=value.object_key,
+                size_bytes=value.size_bytes,
+                checksum=value.checksum,
+                status=value.status.value,
+                created_at=value.created_at,
+            )
+        )
+        await self.sessions().flush()
+
+    async def list_by_scope_and_resource(
+        self, tenant_id: str, biz_domain: str, resource_id: str
+    ) -> list[FileResourceVersion]:
+        rows = (
+            await self.sessions().scalars(
+                select(FileResourceVersionRow)
+                .where(
+                    FileResourceVersionRow.tenant_id == tenant_id,
+                    FileResourceVersionRow.biz_domain == biz_domain,
+                    FileResourceVersionRow.resource_id == resource_id,
+                )
+                .order_by(FileResourceVersionRow.version)
+            )
+        ).all()
+        return [
+            FileResourceVersion(
+                row.version_id,
+                row.resource_id,
+                row.tenant_id,
+                row.biz_domain,
+                row.version,
+                row.object_key,
+                row.size_bytes,
+                row.checksum,
+                FileResourceStatus(row.status),
+                row.created_at,
+            )
+            for row in rows
+        ]
+
+
+class PostgresFileUploadSessionRepository:
+    def __init__(self, sessions: async_scoped_session[AsyncSession]) -> None:
+        self.sessions = sessions
+
+    async def add(self, value: FileUploadSession) -> None:
+        self.sessions().add(
+            FileUploadSessionRow(
+                upload_id=value.upload_id,
+                resource_id=value.resource_id,
+                tenant_id=value.tenant_id,
+                biz_domain=value.biz_domain,
+                provider_upload_id=value.provider_upload_id,
+                upload_reference=value.upload_reference,
+                expires_at=value.expires_at,
+                completed=value.completed,
+                aborted=value.aborted,
+            )
+        )
+        await self.sessions().flush()
+
+    async def save(self, value: FileUploadSession) -> None:
+        row = await self.sessions().scalar(
+            select(FileUploadSessionRow).where(
+                FileUploadSessionRow.tenant_id == value.tenant_id,
+                FileUploadSessionRow.biz_domain == value.biz_domain,
+                FileUploadSessionRow.upload_id == value.upload_id,
+            )
+        )
+        if row is None:
+            await self.add(value)
+            return
+        row.completed = value.completed
+        row.aborted = value.aborted
+        await self.sessions().flush()
+
+    async def get_by_scope_and_id(
+        self, tenant_id: str, biz_domain: str, upload_id: str
+    ) -> FileUploadSession | None:
+        row = await self.sessions().scalar(
+            select(FileUploadSessionRow).where(
+                FileUploadSessionRow.tenant_id == tenant_id,
+                FileUploadSessionRow.biz_domain == biz_domain,
+                FileUploadSessionRow.upload_id == upload_id,
+            )
+        )
+        return (
+            None
+            if row is None
+            else FileUploadSession(
+                row.upload_id,
+                row.resource_id,
+                row.tenant_id,
+                row.biz_domain,
+                row.provider_upload_id,
+                row.upload_reference,
+                row.expires_at,
+                row.completed,
+                row.aborted,
             )
         )
 
@@ -380,6 +516,8 @@ class PostgresAuditSink:
                 result=event.result,
                 error_code=event.error_code,
                 duration_ms=event.duration_ms,
+                offset=event.offset,
+                length=event.length,
                 created_at=event.created_at,
             )
         )

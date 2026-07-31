@@ -4,6 +4,8 @@ from typing import Any
 
 from file_media_stream_service.domain.entities.models import (
     FileResource,
+    FileResourceVersion,
+    FileUploadSession,
     ProcessingJob,
     StreamEvent,
     StreamSession,
@@ -15,6 +17,8 @@ from file_media_stream_service.domain.exceptions.errors import IdempotencyConfli
 class InMemoryState:
     def __init__(self) -> None:
         self.files: dict[tuple[str, str, str], FileResource] = {}
+        self.file_versions: dict[tuple[str, str, str, int], FileResourceVersion] = {}
+        self.file_uploads: dict[tuple[str, str, str], FileUploadSession] = {}
         self.sessions: dict[tuple[str, str, str], StreamSession] = {}
         self.jobs: dict[tuple[str, str, str], ProcessingJob] = {}
 
@@ -35,6 +39,45 @@ class InMemoryFileRepository:
 
     async def delete(self, tenant_id: str, biz_domain: str, resource_id: str) -> None:
         self.state.files.pop((tenant_id, biz_domain, resource_id), None)
+
+    async def save(self, resource: FileResource) -> None:
+        await self.add(resource)
+
+
+class InMemoryFileVersionRepository:
+    def __init__(self, state: InMemoryState) -> None:
+        self.state = state
+
+    async def add(self, version: FileResourceVersion) -> None:
+        key = (version.tenant_id, version.biz_domain, version.resource_id, version.version)
+        self.state.file_versions[key] = deepcopy(version)
+
+    async def list_by_scope_and_resource(
+        self, tenant_id: str, biz_domain: str, resource_id: str
+    ) -> list[FileResourceVersion]:
+        return [
+            deepcopy(version)
+            for (tenant, domain, current_resource, _), version in self.state.file_versions.items()
+            if tenant == tenant_id and domain == biz_domain and current_resource == resource_id
+        ]
+
+
+class InMemoryFileUploadSessionRepository:
+    def __init__(self, state: InMemoryState) -> None:
+        self.state = state
+
+    async def add(self, upload: FileUploadSession) -> None:
+        self.state.file_uploads[(upload.tenant_id, upload.biz_domain, upload.upload_id)] = deepcopy(
+            upload
+        )
+
+    async def save(self, upload: FileUploadSession) -> None:
+        await self.add(upload)
+
+    async def get_by_scope_and_id(
+        self, tenant_id: str, biz_domain: str, upload_id: str
+    ) -> FileUploadSession | None:
+        return deepcopy(self.state.file_uploads.get((tenant_id, biz_domain, upload_id)))
 
 
 class InMemoryStreamSessionRepository:

@@ -1,9 +1,11 @@
 import asyncio
 import hashlib
+import json
 import secrets
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from redis.asyncio import Redis
@@ -12,6 +14,7 @@ from redis.exceptions import RedisError
 from file_media_stream_service.application.dto import RequestContext
 from file_media_stream_service.application.ports.media_provider import StreamLease
 from file_media_stream_service.application.ports.protocols import IdempotencyStore
+from file_media_stream_service.domain.entities import RangeAccessGrant
 from file_media_stream_service.domain.exceptions import (
     QuotaExceeded,
     ReplayDetected,
@@ -233,3 +236,57 @@ class RedisCoordinatedIdempotencyStore:
         lease = self._leases.pop(scope, None)
         if lease is not None:
             await self.coordination.release(lease)
+
+
+class RedisRangeAccessGrantStore:
+    _CONSUME = """
+    local value = redis.call('GET', KEYS[1])
+    if not value then return nil end
+    redis.call('DEL', KEYS[1])
+    return value
+    """
+
+    def __init__(self, client: Redis) -> None:
+        self.client = client
+
+    async def issue(self, grant: RangeAccessGrant) -> None:
+        ttl = max(1, int((grant.expires_at - datetime.now(UTC)).total_seconds()))
+        payload = json.dumps(
+            {
+                "reference_id": grant.reference_id,
+                "resource_id": grant.resource_id,
+                "tenant_id": grant.tenant_id,
+                "biz_domain": grant.biz_domain,
+                "caller_id": grant.caller_id,
+                "caller_type": grant.caller_type,
+                "request_id": grant.request_id,
+                "trace_id": grant.trace_id,
+                "offset": grant.offset,
+                "length": grant.length,
+                "expires_at": grant.expires_at.isoformat(),
+            },
+            separators=(",", ":"),
+        )
+        key = f"fms:range:{_digest(grant.reference_id)}"
+        if not await self.client.set(key, payload, nx=True, ex=ttl):
+            raise RuntimeError("Range access reference already exists")
+
+    async def consume(self, reference_id: str) -> RangeAccessGrant | None:
+        key = f"fms:range:{_digest(reference_id)}"
+        raw = await cast(Any, self.client.eval(self._CONSUME, 1, key))
+        if raw is None:
+            return None
+        data = json.loads(raw)
+        return RangeAccessGrant(
+            reference_id=str(data["reference_id"]),
+            resource_id=str(data["resource_id"]),
+            tenant_id=str(data["tenant_id"]),
+            biz_domain=str(data["biz_domain"]),
+            caller_id=str(data["caller_id"]),
+            caller_type=str(data["caller_type"]),
+            request_id=str(data["request_id"]),
+            trace_id=str(data["trace_id"]),
+            offset=int(data["offset"]),
+            length=int(data["length"]),
+            expires_at=datetime.fromisoformat(str(data["expires_at"])),
+        )

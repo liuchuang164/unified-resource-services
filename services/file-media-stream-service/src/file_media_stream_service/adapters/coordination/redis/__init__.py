@@ -3,6 +3,7 @@ from .adapter import (
     RedisCoordinatedIdempotencyStore,
     RedisCoordination,
     RedisQuotaChecker,
+    RedisRangeAccessGrantStore,
     RedisReplayProtector,
 )
 from .client import create_redis_client
@@ -12,6 +13,7 @@ __all__ = [
     "RedisCoordinatedIdempotencyStore",
     "RedisCoordination",
     "RedisQuotaChecker",
+    "RedisRangeAccessGrantStore",
     "RedisReplayProtector",
     "create_redis_client",
 ]

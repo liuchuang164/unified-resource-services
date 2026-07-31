@@ -1,4 +1,5 @@
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -6,7 +7,10 @@ from file_media_stream_service.application.dto.contracts import RequestContext
 from file_media_stream_service.domain.entities.models import (
     AuditEvent,
     FileResource,
+    FileResourceVersion,
+    FileUploadSession,
     ProcessingJob,
+    RangeAccessGrant,
     StreamEvent,
     StreamSession,
 )
@@ -18,6 +22,22 @@ class FileRepository(Protocol):
     async def get_by_scope_and_id(
         self, tenant_id: str, biz_domain: str, resource_id: str
     ) -> FileResource | None: ...
+    async def save(self, resource: FileResource) -> None: ...
+
+
+class FileVersionRepository(Protocol):
+    async def add(self, version: FileResourceVersion) -> None: ...
+    async def list_by_scope_and_resource(
+        self, tenant_id: str, biz_domain: str, resource_id: str
+    ) -> list[FileResourceVersion]: ...
+
+
+class FileUploadSessionRepository(Protocol):
+    async def add(self, upload: FileUploadSession) -> None: ...
+    async def save(self, upload: FileUploadSession) -> None: ...
+    async def get_by_scope_and_id(
+        self, tenant_id: str, biz_domain: str, upload_id: str
+    ) -> FileUploadSession | None: ...
 
 
 class StreamSessionRepository(Protocol):
@@ -89,9 +109,41 @@ class IdentifierFactory(Protocol):
     def new_id(self, prefix: str) -> str: ...
 
 
+@dataclass(frozen=True, slots=True)
+class UploadHandle:
+    provider_upload_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class StoredObjectMetadata:
+    size_bytes: int
+    checksum: str
+    content_type: str | None
+
+
 class ObjectStorage(Protocol):
     async def initialize_upload(self, object_key: str, mime_type: str, size_bytes: int) -> str: ...
+    async def create_multipart_upload(self, object_key: str) -> UploadHandle: ...
+    async def complete_multipart_upload(
+        self, object_key: str, provider_upload_id: str, parts: tuple[tuple[int, str], ...]
+    ) -> StoredObjectMetadata: ...
+    async def abort_multipart_upload(self, object_key: str, provider_upload_id: str) -> None: ...
     async def abort_upload(self, object_key: str) -> None: ...
+    async def get_metadata(self, object_key: str) -> StoredObjectMetadata: ...
+    async def create_download_url(self, object_key: str) -> tuple[str, datetime]: ...
+    def stream_range(self, object_key: str, offset: int, length: int) -> AsyncIterator[bytes]: ...
+    async def delete(self, object_key: str) -> None: ...
+
+
+class RangeAccessGrantStore(Protocol):
+    async def issue(self, grant: RangeAccessGrant) -> None: ...
+    async def consume(self, reference_id: str) -> RangeAccessGrant | None: ...
+
+
+class MalwareScannerPort(Protocol):
+    async def validate_metadata(
+        self, filename: str, mime_type: str, size_bytes: int, checksum: str
+    ) -> None: ...
 
 
 class MediaServer(Protocol):

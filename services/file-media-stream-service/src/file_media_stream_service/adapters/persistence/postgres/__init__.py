@@ -2,6 +2,8 @@ from .health import PostgresHealth
 from .repositories import (
     PostgresAuditSink,
     PostgresFileRepository,
+    PostgresFileUploadSessionRepository,
+    PostgresFileVersionRepository,
     PostgresIdempotencyStore,
     PostgresIndependentReconciliationStore,
     PostgresProcessingJobRepository,
@@ -15,6 +17,8 @@ from .transaction import PostgresTransactionManager
 __all__ = [
     "PostgresAuditSink",
     "PostgresFileRepository",
+    "PostgresFileUploadSessionRepository",
+    "PostgresFileVersionRepository",
     "PostgresHealth",
     "PostgresIdempotencyStore",
     "PostgresIndependentReconciliationStore",

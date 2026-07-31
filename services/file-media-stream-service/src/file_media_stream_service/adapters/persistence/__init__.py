@@ -1,5 +1,7 @@
 from .in_memory import (
     InMemoryFileRepository,
+    InMemoryFileUploadSessionRepository,
+    InMemoryFileVersionRepository,
     InMemoryIdempotencyStore,
     InMemoryProcessingJobRepository,
     InMemoryState,
@@ -10,6 +12,8 @@ from .reconciliation import InMemoryReconciliationStore
 
 __all__ = [
     "InMemoryFileRepository",
+    "InMemoryFileUploadSessionRepository",
+    "InMemoryFileVersionRepository",
     "InMemoryIdempotencyStore",
     "InMemoryProcessingJobRepository",
     "InMemoryReconciliationStore",

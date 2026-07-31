@@ -1,8 +1,11 @@
 from .models import (
     AuditEvent,
     FileResource,
+    FileResourceVersion,
+    FileUploadSession,
     MediaResource,
     ProcessingJob,
+    RangeAccessGrant,
     ResourceGrant,
     StreamEvent,
     StreamSession,
@@ -11,8 +14,11 @@ from .models import (
 __all__ = [
     "AuditEvent",
     "FileResource",
+    "FileResourceVersion",
+    "FileUploadSession",
     "MediaResource",
     "ProcessingJob",
+    "RangeAccessGrant",
     "ResourceGrant",
     "StreamEvent",
     "StreamSession",

@@ -38,6 +38,38 @@ class FileResourceRow(ScopeMixin, Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class FileResourceVersionRow(ScopeMixin, Base):
+    __tablename__ = "file_resource_version"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "biz_domain", "resource_id", "version"),
+        UniqueConstraint("version_id"),
+        Index("ix_file_version_scope_resource", "tenant_id", "biz_domain", "resource_id"),
+    )
+    version_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FileUploadSessionRow(ScopeMixin, Base):
+    __tablename__ = "file_upload_session"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "biz_domain", "upload_id"),
+        Index("ix_file_upload_scope_resource", "tenant_id", "biz_domain", "resource_id"),
+    )
+    upload_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_upload_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    upload_reference: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed: Mapped[bool] = mapped_column(nullable=False, default=False)
+    aborted: Mapped[bool] = mapped_column(nullable=False, default=False)
+
+
 class MediaResourceRow(ScopeMixin, Base):
     __tablename__ = "media_resource"
     __table_args__ = (UniqueConstraint("tenant_id", "biz_domain", "resource_id"),)
@@ -131,6 +163,8 @@ class AuditEventRow(ScopeMixin, Base):
     result: Mapped[str] = mapped_column(String(16), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(64))
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    offset: Mapped[int | None] = mapped_column(Integer)
+    length: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

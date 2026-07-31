@@ -4,6 +4,7 @@ from enum import StrEnum
 class FileResourceStatus(StrEnum):
     PENDING_UPLOAD = "PENDING_UPLOAD"
     UPLOADING = "UPLOADING"
+    VERIFYING = "VERIFYING"
     AVAILABLE = "AVAILABLE"
     PROCESSING = "PROCESSING"
     QUARANTINED = "QUARANTINED"

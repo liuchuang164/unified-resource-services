@@ -1,11 +1,16 @@
 import asyncio
 import hashlib
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from minio import Minio
 from minio.error import S3Error
+
+from file_media_stream_service.application.ports.protocols import (
+    StoredObjectMetadata,
+    UploadHandle,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +71,10 @@ class MinioObjectStorage:
         )
         return MultipartUpload(upload_id=upload_id, object_key=object_key)
 
+    async def create_multipart_upload(self, object_key: str) -> UploadHandle:
+        upload = await self.begin_multipart(object_key)
+        return UploadHandle(upload.upload_id)
+
     async def upload_part(
         self,
         upload: MultipartUpload,
@@ -90,7 +99,7 @@ class MinioObjectStorage:
         self,
         upload: MultipartUpload,
         parts: Iterable[tuple[int, str]],
-    ) -> ObjectMetadata:
+    ) -> StoredObjectMetadata:
         from minio.datatypes import Part
 
         self._validate_key(upload.object_key)
@@ -107,6 +116,12 @@ class MinioObjectStorage:
         )
         return await self.get_metadata(upload.object_key)
 
+    async def complete_multipart_upload(
+        self, object_key: str, provider_upload_id: str, parts: tuple[tuple[int, str], ...]
+    ) -> StoredObjectMetadata:
+        await self.complete_multipart(MultipartUpload(provider_upload_id, object_key), parts)
+        return await self.get_metadata(object_key)
+
     async def abort_multipart(self, upload: MultipartUpload) -> None:
         self._validate_key(upload.object_key)
         await asyncio.to_thread(
@@ -116,6 +131,9 @@ class MinioObjectStorage:
             upload.upload_id,
         )
 
+    async def abort_multipart_upload(self, object_key: str, provider_upload_id: str) -> None:
+        await self.abort_multipart(MultipartUpload(provider_upload_id, object_key))
+
     async def abort_upload(self, object_key: str) -> None:
         self._validate_key(object_key)
         try:
@@ -124,12 +142,12 @@ class MinioObjectStorage:
             if error.code not in {"NoSuchKey", "NoSuchObject"}:
                 raise
 
-    async def get_metadata(self, object_key: str) -> ObjectMetadata:
+    async def get_metadata(self, object_key: str) -> StoredObjectMetadata:
         self._validate_key(object_key)
         value = await asyncio.to_thread(self._client.stat_object, self._bucket, object_key)
-        return ObjectMetadata(
+        return StoredObjectMetadata(
             size_bytes=int(value.size or 0),
-            etag=str(value.etag),
+            checksum=await self._sha256(object_key),
             content_type=value.content_type,
         )
 
@@ -141,6 +159,10 @@ class MinioObjectStorage:
             object_key,
             self._download_ttl,
         )
+
+    async def create_download_url(self, object_key: str) -> tuple[str, datetime]:
+        url = await self.presigned_download_url(object_key)
+        return (url, datetime.now(UTC) + self._download_ttl)
 
     async def read_range(self, object_key: str, offset: int, length: int) -> bytes:
         self._validate_key(object_key)
@@ -158,6 +180,30 @@ class MinioObjectStorage:
         finally:
             response.close()
             response.release_conn()
+
+    async def _stream_range(
+        self, object_key: str, offset: int, length: int
+    ) -> AsyncIterator[bytes]:
+        self._validate_key(object_key)
+        if offset < 0 or length <= 0:
+            raise ValueError("range offset and length are invalid")
+        response = await asyncio.to_thread(
+            self._client.get_object, self._bucket, object_key, offset, length
+        )
+        remaining = length
+        try:
+            while remaining:
+                chunk = await asyncio.to_thread(response.read, min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+        finally:
+            response.close()
+            response.release_conn()
+
+    def stream_range(self, object_key: str, offset: int, length: int) -> AsyncIterator[bytes]:
+        return self._stream_range(object_key, offset, length)
 
     async def delete(self, object_key: str) -> None:
         self._validate_key(object_key)
@@ -181,6 +227,17 @@ class MinioObjectStorage:
 
     async def check(self) -> bool:
         return await self.health()
+
+    async def _sha256(self, object_key: str) -> str:
+        response = await asyncio.to_thread(self._client.get_object, self._bucket, object_key)
+        digest = hashlib.sha256()
+        try:
+            while chunk := await asyncio.to_thread(response.read, 64 * 1024):
+                digest.update(chunk)
+        finally:
+            response.close()
+            response.release_conn()
+        return digest.hexdigest()
 
     @staticmethod
     def _validate_key(object_key: str) -> None:
