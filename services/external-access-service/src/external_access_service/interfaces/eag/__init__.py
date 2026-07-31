@@ -1,0 +1,2 @@
+"""External Access Gateway interface."""
+
