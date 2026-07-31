@@ -1,0 +1,49 @@
+name: data-access-gateway
+
+on:
+  push:
+    branches:
+      - main
+      - feature/database-distribution-control-service
+    paths:
+      - "services/data-access-gateway/**"
+      - "services/data-control-service/**"
+      - "docs/architecture/**"
+      - ".github/workflows/data-access-gateway.yml"
+  pull_request:
+    paths:
+      - "services/data-access-gateway/**"
+      - "services/data-control-service/**"
+      - "docs/architecture/**"
+      - ".github/workflows/data-access-gateway.yml"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/data-access-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip install -e "../data-control-service"
+      - name: Lint
+        run: ruff check src tests scripts
+      - name: Format check
+        run: ruff format --check src tests scripts
+      - name: Mypy
+        run: mypy src
+      - name: Tests
+        run: pytest -q
+      - name: Coverage
+        run: pytest --cov=data_access_gateway --cov-report=term-missing --cov-fail-under=80 -q
+      - name: Secret scan
+        run: |
+          ! grep -RInE "BEGIN (RSA|OPENSSH|PRIVATE)|AKIA[0-9A-Z]{16}|api[_-]?key\\s*=\\s*['\"][^'\"]+|secret\\s*=\\s*['\"][^'\"]+" \
+            src tests scripts README.md

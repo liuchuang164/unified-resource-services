@@ -7,6 +7,7 @@ from data_control_service.api.dependencies import close_database_managers
 from data_control_service.api.exception_handlers import register_exception_handlers
 from data_control_service.api.routes.data import router as data_router
 from data_control_service.api.routes.health import router as health_router
+from data_control_service.api.routes.operations import router as operations_router
 from data_control_service.config.logging import configure_logging
 from data_control_service.config.settings import Settings
 from data_control_service.domain.exceptions import DataControlError
@@ -33,4 +34,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(data_router)
+    app.include_router(operations_router)
     return app

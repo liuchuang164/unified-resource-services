@@ -190,3 +190,21 @@ tool_name + action -> operation + resource.target + resource.type + payload sche
 ```
 
 Tool 参数不得直接决定物理数据源、表名或查询语句。映射失败返回 Tool 层错误，不能把未知 Tool 透传给 `/data/dispatch`。
+
+正式 Tool 接口为：
+
+- `GET /dag/tools`
+- `GET /dag/tools/{tool_name}/schema`
+- `POST /dag/tools/execute`
+
+Agent 使用短期签名 Capability Token。Gateway 必须从 Token 建立可信的 `agent_id`、
+`tenant_id`、`biz_domain`、`session_id`、`task_id`、Tool 与 Action 作用域；请求体中的同名
+字段只能用于一致性校验。
+
+对于写 Action，Gateway 可以透传调用方提供的 `idempotency_key`，或根据
+`tenant_id + biz_domain + agent_id + session_id + task_id + tool_call_id + tool_name + action`
+确定性生成 Key。Gateway 不保存业务幂等状态，最终幂等裁决由 `/data/dispatch` 完成。
+
+MinIO Tool 参数不得包含 `bucket`、`object_key`、`endpoint`、`access_key`、`secret_key`、
+`local_path`、`filesystem_path` 或 `minio_url`。Gateway 只映射逻辑对象操作，物理路径由
+服务端 Resource Mapping 和 MinIO Adapter 生成。

@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
     auth_provider: str = "development"
+    capability_token_algorithm: str = "HS256"  # noqa: S105
+    capability_token_issuer: str = "unified-access-plane"  # noqa: S105
+    capability_token_audience: str = "data-control-service"  # noqa: S105
+    capability_token_shared_secret: str | None = None
+    capability_token_public_key: str | None = None
     control_database_url: str | None = None
     control_database_migration_url: str | None = None
     control_migration_head_revision: str = "0007"

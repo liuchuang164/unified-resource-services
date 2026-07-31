@@ -159,6 +159,24 @@ class DataControlService:
             )
             raise
 
+    def describe_operations(self) -> list[dict[str, object]]:
+        descriptions: list[dict[str, object]] = []
+        for adapter in self._adapter_registry.list_adapters():
+            capabilities = adapter.capabilities()
+            descriptions.append(
+                {
+                    "target": adapter.target.value,
+                    "adapter": adapter.name,
+                    "operations": sorted(item.value for item in capabilities.operations),
+                    "supports_transactions": capabilities.supports_transactions,
+                    "supports_atomic_transaction": capabilities.supports_atomic_transaction,
+                    "supports_cursor_pagination": capabilities.supports_cursor_pagination,
+                    "timeout_ms": capabilities.timeout_ms,
+                    "required": capabilities.required,
+                }
+            )
+        return descriptions
+
     async def _record_access(
         self,
         request: DataRequest,

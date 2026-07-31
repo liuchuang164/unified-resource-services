@@ -2,6 +2,14 @@
 
 Phase 3 Python/FastAPI service for `POST /data/dispatch`, with PostgreSQL control-plane persistence, a real SQLAlchemy PostgreSQL adapter path and a real `redis.asyncio` Redis adapter path.
 
+Logical capability discovery is available through `GET /data/operations` and
+`GET /data/operations/{operation}/schema`.
+
+`AUTH_PROVIDER=capability_token` enables the Agent Data Access Gateway path. Development and test
+may use `CAPABILITY_TOKEN_ALGORITHM=HS256` with `CAPABILITY_TOKEN_SHARED_SECRET`. Production rejects
+symmetric capability tokens and requires an asymmetric verification key through
+`CAPABILITY_TOKEN_PUBLIC_KEY`.
+
 ## Run
 
 ```bash

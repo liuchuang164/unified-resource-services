@@ -16,6 +16,9 @@ from data_control_service.config.settings import Settings
 from data_control_service.contracts.enums import DataTarget
 from data_control_service.domain.exceptions import DataControlError
 from data_control_service.domain.policies import create_default_resource_registry
+from data_control_service.infrastructure.auth.capability_token_auth_provider import (
+    CapabilityTokenAuthProvider,
+)
 from data_control_service.infrastructure.auth.development_auth_provider import (
     DevelopmentAuthProvider,
 )
@@ -250,6 +253,8 @@ def get_auth_provider() -> AuthProvider:
     settings = get_settings()
     if settings.auth_provider == "development":
         return DevelopmentAuthProvider(settings)
+    if settings.auth_provider == "capability_token":
+        return CapabilityTokenAuthProvider(settings)
     raise DataControlError("CONFIGURATION_INVALID", "unknown auth provider")
 
 

@@ -61,11 +61,20 @@ PostgreSQL / MinIO / Redis / Neo4j / Milvus / TimescaleDB Adapter
 
 Data Access Gateway 暴露：
 
-- `GET /tools/list`
-- `GET /tools/schema`
-- `POST /tools/execute`
+- `GET /dag/tools`
+- `GET /dag/tools/{tool_name}/schema`
+- `POST /dag/tools/execute`
 
 Gateway 负责 Tool 协议校验、Agent 上下文提取、Tool 到数据操作的映射，以及 `ToolRequest -> DataRequest` 转换。数据库分发管控服务不直接理解开放式 Tool Prompt。
+
+Gateway 不建立第二套业务幂等 Repository、状态机或结果缓存。Gateway 只校验或根据稳定
+Tool 调用标识确定性生成 `idempotency_key`，并将其传给 `/data/dispatch`。幂等认领、并发
+控制、请求摘要、冲突判断、结果重放和失败恢复只能由数据库分发管控统一入口执行。
+
+Capability Token 防重放属于 Gateway 认证安全，不属于数据写入业务幂等。
+
+Gateway 不得直接连接 PostgreSQL、Redis、MinIO 或其他目标数据源，不得持有目标数据源
+凭据，不得自行生成物理表名、Bucket 或 Object Key。
 
 ## 4. 模块划分
 

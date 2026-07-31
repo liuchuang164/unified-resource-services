@@ -26,6 +26,10 @@ class AuthenticatedPrincipal:
     permissions: tuple[str, ...]
     credential_source: str
     authenticated_at: datetime
+    session_id: str | None = None
+    task_id: str | None = None
+    allowed_tools: tuple[str, ...] = ()
+    allowed_actions: tuple[str, ...] = ()
 
 
 class AuthProvider(Protocol):

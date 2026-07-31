@@ -1,0 +1,41 @@
+services:
+  data-control-service:
+    build:
+      context: ../data-control-service
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.org}
+    env_file:
+      - .env.data-control
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json, urllib.request;
+          data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health/ready'));
+          raise SystemExit(0 if data.get('ready') else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  data-access-gateway:
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.org}
+    env_file:
+      - .env.gateway
+    environment:
+      DATA_CONTROL_BASE_URL: http://data-control-service:8000
+    ports:
+      - "8081:8081"
+    depends_on:
+      data-control-service:
+        condition: service_healthy
+    restart: unless-stopped

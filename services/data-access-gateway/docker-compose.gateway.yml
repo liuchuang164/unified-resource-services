@@ -1,0 +1,17 @@
+services:
+  data-access-gateway:
+    build:
+      context: .
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATA_CONTROL_BASE_URL: ${DATA_CONTROL_BASE_URL:-http://host.docker.internal:8000}
+      DATA_CONTROL_TIMEOUT_SECONDS: ${DATA_CONTROL_TIMEOUT_SECONDS:-15}
+      CAPABILITY_TOKEN_ALGORITHM: ${CAPABILITY_TOKEN_ALGORITHM:-HS256}
+      CAPABILITY_TOKEN_ISSUER: ${CAPABILITY_TOKEN_ISSUER:-unified-access-plane}
+      CAPABILITY_TOKEN_AUDIENCE: ${CAPABILITY_TOKEN_AUDIENCE:-data-access-gateway}
+      CAPABILITY_TOKEN_SHARED_SECRET: ${CAPABILITY_TOKEN_SHARED_SECRET:?required}
+      CAPABILITY_TOKEN_PUBLIC_KEY: ${CAPABILITY_TOKEN_PUBLIC_KEY:-}
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
