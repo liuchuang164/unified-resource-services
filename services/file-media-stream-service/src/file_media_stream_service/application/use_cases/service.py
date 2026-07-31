@@ -13,12 +13,16 @@ from file_media_stream_service.application.ports.protocols import (
     Clock,
     EventBus,
     FileRepository,
+    FileUploadSessionRepository,
+    FileVersionRepository,
     IdentifierFactory,
+    MalwareScannerPort,
     MediaServer,
     ObjectStorage,
     ProcessingJobRepository,
     Processor,
     ProvisioningCompensator,
+    RangeAccessGrantStore,
     ReconciliationStore,
     StreamEventSink,
     StreamSessionRepository,
@@ -26,7 +30,10 @@ from file_media_stream_service.application.ports.protocols import (
 )
 from file_media_stream_service.domain.entities.models import (
     FileResource,
+    FileResourceVersion,
+    FileUploadSession,
     ProcessingJob,
+    RangeAccessGrant,
     StreamEvent,
     StreamSession,
 )
@@ -121,6 +128,12 @@ class UseCases:
         stream_events: StreamEventSink | None = None,
         transactions: TransactionManager | None = None,
         provisioning_compensator: ProvisioningCompensator | None = None,
+        file_versions: FileVersionRepository | None = None,
+        file_uploads: FileUploadSessionRepository | None = None,
+        range_grants: RangeAccessGrantStore | None = None,
+        malware_scanner: MalwareScannerPort | None = None,
+        upload_ttl_seconds: int = 900,
+        range_grant_ttl_seconds: int = 60,
     ) -> None:
         self.files = files
         self.sessions = sessions
@@ -138,6 +151,12 @@ class UseCases:
         self.stream_events = stream_events
         self.transactions = transactions
         self.provisioning_compensator = provisioning_compensator
+        self.file_versions = file_versions
+        self.file_uploads = file_uploads
+        self.range_grants = range_grants
+        self.malware_scanner = malware_scanner
+        self.upload_ttl_seconds = upload_ttl_seconds
+        self.range_grant_ttl_seconds = range_grant_ttl_seconds
 
     async def execute(
         self, operation: str, context: RequestContext, payload: dict[str, Any]
@@ -145,6 +164,12 @@ class UseCases:
         handlers = {
             "file.initialize_upload": self.initialize_upload,
             "file.get_resource": self.get_resource,
+            "file.complete_upload": self.complete_upload,
+            "file.abort_upload": self.abort_upload,
+            "file.create_download_url": self.create_download_url,
+            "file.read_range": self.issue_range_access,
+            "file.get_metadata": self.get_metadata,
+            "file.delete_file": self.delete_file,
             "media.create_stream_session": self.create_stream_session,
             "media.get_stream_session": self.get_stream_session,
             "media.close_stream_session": self.close_stream_session,
@@ -183,10 +208,22 @@ class UseCases:
         upload_reference = await self.storage.initialize_upload(
             object_key, resource.mime_type, resource.size_bytes
         )
+        handle = await self.storage.create_multipart_upload(object_key)
+        upload = FileUploadSession(
+            upload_id=self.ids.new_id("upl"),
+            resource_id=resource_id,
+            tenant_id=context.tenant_id,
+            biz_domain=context.biz_domain,
+            provider_upload_id=handle.provider_upload_id,
+            upload_reference=upload_reference,
+            expires_at=self.clock.now() + timedelta(seconds=self.upload_ttl_seconds),
+        )
         try:
             await self.files.add(resource)
+            if self.file_uploads is not None:
+                await self.file_uploads.add(upload)
         except Exception:
-            await self.storage.abort_upload(object_key)
+            await self.storage.abort_multipart_upload(object_key, handle.provider_upload_id)
             raise
         try:
             await self.events.publish("file.upload_initialized", {"resource_id": resource_id})
@@ -215,7 +252,242 @@ class UseCases:
                     recovery_key, context.tenant_id, context.biz_domain
                 )
             raise
-        return {"resource": public_dict(resource), "upload_reference": upload_reference}
+        return {
+            "resource": public_dict(resource),
+            "upload_id": upload.upload_id,
+            "upload_reference": upload_reference,
+            "expires_at": upload.expires_at.isoformat(),
+        }
+
+    async def complete_upload(
+        self, context: RequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        resource = await self._file(context, str(payload["resource_id"]))
+        upload = await self._upload(context, str(payload["upload_id"]))
+        if upload.resource_id != resource.resource_id or upload.aborted:
+            raise FileResourceNotFound("File upload not found")
+        if upload.completed and resource.status is FileResourceStatus.AVAILABLE:
+            return {"resource": public_dict(resource)}
+        resource.transition_to(FileResourceStatus.UPLOADING)
+        parts = tuple((int(part["part_number"]), str(part["etag"])) for part in payload["parts"])
+        try:
+            metadata = await self.storage.complete_multipart_upload(
+                resource.object_key, upload.provider_upload_id, parts
+            )
+            resource.transition_to(FileResourceStatus.VERIFYING)
+            checksum = str(payload["checksum"]).lower()
+            if metadata.size_bytes != resource.size_bytes or metadata.checksum.lower() != checksum:
+                raise ValueError("uploaded object metadata does not match declaration")
+            if metadata.content_type and metadata.content_type != resource.mime_type:
+                raise ValueError("uploaded object content type does not match declaration")
+            if self.malware_scanner is not None:
+                await self.malware_scanner.validate_metadata(
+                    resource.normalized_filename,
+                    resource.mime_type,
+                    metadata.size_bytes,
+                    metadata.checksum,
+                )
+            resource.sha256 = metadata.checksum.lower()
+            resource.transition_to(FileResourceStatus.AVAILABLE)
+            await self.files.save(resource)
+            if self.file_versions is not None:
+                await self.file_versions.add(
+                    FileResourceVersion(
+                        version_id=self.ids.new_id("ver"),
+                        resource_id=resource.resource_id,
+                        tenant_id=resource.tenant_id,
+                        biz_domain=resource.biz_domain,
+                        version=resource.version,
+                        object_key=resource.object_key,
+                        size_bytes=resource.size_bytes,
+                        checksum=resource.sha256,
+                        status=resource.status,
+                        created_at=self.clock.now(),
+                    )
+                )
+            upload.completed = True
+            if self.file_uploads is not None:
+                await self.file_uploads.save(upload)
+        except Exception:
+            if resource.status in {
+                FileResourceStatus.UPLOADING,
+                FileResourceStatus.VERIFYING,
+            }:
+                resource.transition_to(FileResourceStatus.FAILED)
+                try:
+                    await self.files.save(resource)
+                except Exception:
+                    await self.reconciliation.record(
+                        f"file-metadata:{resource.resource_id}",
+                        "FILE_METADATA_SYNC_REQUIRED",
+                        {
+                            "tenant_id": context.tenant_id,
+                            "biz_domain": context.biz_domain,
+                            "resource_id": resource.resource_id,
+                        },
+                    )
+            elif resource.status is FileResourceStatus.AVAILABLE:
+                await self.reconciliation.record(
+                    f"file-metadata:{resource.resource_id}",
+                    "FILE_METADATA_SYNC_REQUIRED",
+                    {
+                        "tenant_id": context.tenant_id,
+                        "biz_domain": context.biz_domain,
+                        "resource_id": resource.resource_id,
+                    },
+                )
+            raise
+        return {"resource": public_dict(resource)}
+
+    async def abort_upload(
+        self, context: RequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        resource = await self._file(context, str(payload["resource_id"]))
+        upload = await self._upload(context, str(payload["upload_id"]))
+        if upload.resource_id != resource.resource_id:
+            raise FileResourceNotFound("File upload not found")
+        if not upload.aborted:
+            await self.storage.abort_multipart_upload(
+                resource.object_key, upload.provider_upload_id
+            )
+            upload.aborted = True
+            if self.file_uploads is not None:
+                await self.file_uploads.save(upload)
+            if resource.status in {
+                FileResourceStatus.PENDING_UPLOAD,
+                FileResourceStatus.UPLOADING,
+            }:
+                resource.transition_to(FileResourceStatus.FAILED)
+                await self.files.save(resource)
+        return {"resource": public_dict(resource)}
+
+    async def create_download_url(
+        self, context: RequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        resource = await self._available_file(context, str(payload["resource_id"]))
+        url, expires_at = await self.storage.create_download_url(resource.object_key)
+        return {
+            "resource_id": resource.resource_id,
+            "url": url,
+            "expires_at": expires_at.isoformat(),
+        }
+
+    async def issue_range_access(
+        self, context: RequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        resource = await self._available_file(context, str(payload["resource_id"]))
+        offset, length = int(payload["offset"]), int(payload["length"])
+        if offset >= resource.size_bytes or offset + length > resource.size_bytes:
+            raise ValueError("requested range is outside the resource")
+        if self.range_grants is None:
+            raise RuntimeError("Range access store is unavailable")
+        grant = RangeAccessGrant(
+            reference_id=self.ids.new_id("rng"),
+            resource_id=resource.resource_id,
+            tenant_id=context.tenant_id,
+            biz_domain=context.biz_domain,
+            caller_id=context.caller_id,
+            caller_type=context.caller_type,
+            request_id=context.request_id,
+            trace_id=context.trace_id,
+            offset=offset,
+            length=length,
+            expires_at=self.clock.now() + timedelta(seconds=self.range_grant_ttl_seconds),
+        )
+        await self.range_grants.issue(grant)
+        return {
+            "reference_id": grant.reference_id,
+            "resource_id": grant.resource_id,
+            "offset": grant.offset,
+            "length": grant.length,
+            "expires_at": grant.expires_at.isoformat(),
+        }
+
+    async def consume_range_access(
+        self, reference_id: str
+    ) -> tuple[RangeAccessGrant, FileResource, Any]:
+        if self.range_grants is None:
+            raise FileResourceNotFound("Range access reference not found")
+        grant = await self.range_grants.consume(reference_id)
+        if grant is None or grant.expires_at <= self.clock.now():
+            raise FileResourceNotFound("Range access reference not found")
+        resource = await self.files.get_by_scope_and_id(
+            grant.tenant_id, grant.biz_domain, grant.resource_id
+        )
+        if resource is None or resource.status is not FileResourceStatus.AVAILABLE:
+            raise FileResourceNotFound("File resource not found")
+        return (
+            grant,
+            resource,
+            self.storage.stream_range(resource.object_key, grant.offset, grant.length),
+        )
+
+    async def get_metadata(
+        self, context: RequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        resource = await self._file(context, str(payload["resource_id"]))
+        versions = (
+            await self.file_versions.list_by_scope_and_resource(
+                context.tenant_id, context.biz_domain, resource.resource_id
+            )
+            if self.file_versions is not None
+            else []
+        )
+        return {
+            "resource": public_dict(resource),
+            "versions": [
+                {
+                    "version_id": item.version_id,
+                    "version": item.version,
+                    "size_bytes": item.size_bytes,
+                    "checksum": item.checksum,
+                    "status": item.status.value,
+                    "created_at": item.created_at.isoformat(),
+                }
+                for item in versions
+            ],
+        }
+
+    async def delete_file(self, context: RequestContext, payload: dict[str, Any]) -> dict[str, Any]:
+        resource = await self._file(context, str(payload["resource_id"]))
+        if resource.status is FileResourceStatus.DELETED:
+            return {"resource": public_dict(resource)}
+        resource.transition_to(FileResourceStatus.DELETING)
+        try:
+            await self.storage.delete(resource.object_key)
+            resource.transition_to(FileResourceStatus.DELETED)
+        except Exception:
+            resource.transition_to(FileResourceStatus.FAILED)
+            await self.files.save(resource)
+            raise
+        await self.files.save(resource)
+        return {"resource": public_dict(resource)}
+
+    async def _file(self, context: RequestContext, resource_id: str) -> FileResource:
+        resource = await self.files.get_by_scope_and_id(
+            context.tenant_id, context.biz_domain, resource_id
+        )
+        if resource is None:
+            raise FileResourceNotFound("File resource not found")
+        return resource
+
+    async def _available_file(self, context: RequestContext, resource_id: str) -> FileResource:
+        resource = await self._file(context, resource_id)
+        if resource.status is not FileResourceStatus.AVAILABLE:
+            raise ValueError("File resource is not available")
+        return resource
+
+    async def _upload(self, context: RequestContext, upload_id: str) -> FileUploadSession:
+        upload = (
+            await self.file_uploads.get_by_scope_and_id(
+                context.tenant_id, context.biz_domain, upload_id
+            )
+            if self.file_uploads is not None
+            else None
+        )
+        if upload is None:
+            raise FileResourceNotFound("File upload not found")
+        return upload
 
     async def get_resource(
         self, context: RequestContext, payload: dict[str, Any]

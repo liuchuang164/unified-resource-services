@@ -5,10 +5,12 @@ from file_media_stream_service.adapters.coordination.redis import (
     RedisCoordinatedIdempotencyStore,
     RedisCoordination,
     RedisQuotaChecker,
+    RedisRangeAccessGrantStore,
     RedisReplayProtector,
     create_redis_client,
 )
 from file_media_stream_service.adapters.event_bus import InMemoryEventBus
+from file_media_stream_service.adapters.file_verification import MetadataSafetyValidator
 from file_media_stream_service.adapters.media_provider import (
     FakeMediaProvider,
     GenericHttpMediaProvider,
@@ -22,6 +24,8 @@ from file_media_stream_service.adapters.object_storage.minio import (
 )
 from file_media_stream_service.adapters.persistence import (
     InMemoryFileRepository,
+    InMemoryFileUploadSessionRepository,
+    InMemoryFileVersionRepository,
     InMemoryIdempotencyStore,
     InMemoryProcessingJobRepository,
     InMemoryReconciliationStore,
@@ -32,6 +36,8 @@ from file_media_stream_service.adapters.persistence import (
 from file_media_stream_service.adapters.persistence.postgres import (
     PostgresAuditSink,
     PostgresFileRepository,
+    PostgresFileUploadSessionRepository,
+    PostgresFileVersionRepository,
     PostgresHealth,
     PostgresIdempotencyStore,
     PostgresIndependentReconciliationStore,
@@ -53,6 +59,7 @@ from file_media_stream_service.adapters.production_boundaries import (
 from file_media_stream_service.adapters.provisioning_compensation import (
     StreamProvisioningCompensator,
 )
+from file_media_stream_service.adapters.range_access import InMemoryRangeAccessGrantStore
 from file_media_stream_service.adapters.readiness import ProductionReadiness
 from file_media_stream_service.application.ports.media_provider import MediaProviderPort
 from file_media_stream_service.application.use_cases import StreamLifecycleService, UseCases
@@ -66,6 +73,12 @@ from file_media_stream_service.workers import StreamLifecycleWorker
 OPERATIONS = (
     "file.initialize_upload",
     "file.get_resource",
+    "file.complete_upload",
+    "file.abort_upload",
+    "file.create_download_url",
+    "file.read_range",
+    "file.get_metadata",
+    "file.delete_file",
     "media.create_stream_session",
     "media.get_stream_session",
     "media.close_stream_session",
@@ -75,6 +88,12 @@ OPERATIONS = (
 AUTHORIZATION_ACTIONS = (
     "file.initialize_upload",
     "file.get_resource",
+    "file.complete_upload",
+    "file.abort_upload",
+    "file.create_download_url",
+    "file.read_range",
+    "file.get_metadata",
+    "file.delete_file",
     "media_stream:create",
     "media_stream:publish",
     "media_stream:subscribe",
@@ -145,6 +164,10 @@ def build_container(settings: Settings | None = None) -> Container | ProductionC
     security = FakeSecurity(rules=rules, valid_tokens=frozenset({"dev-capability-token"}))
     use_cases = UseCases(
         files=InMemoryFileRepository(state),
+        file_versions=InMemoryFileVersionRepository(state),
+        file_uploads=InMemoryFileUploadSessionRepository(state),
+        range_grants=InMemoryRangeAccessGrantStore(),
+        malware_scanner=MetadataSafetyValidator(),
         sessions=InMemoryStreamSessionRepository(state),
         jobs=InMemoryProcessingJobRepository(state),
         storage=storage,
@@ -246,6 +269,10 @@ def build_production_container(settings: Settings) -> ProductionContainer:
     )
     use_cases = UseCases(
         files=PostgresFileRepository(sessions),
+        file_versions=PostgresFileVersionRepository(sessions),
+        file_uploads=PostgresFileUploadSessionRepository(sessions),
+        range_grants=RedisRangeAccessGrantStore(redis_client),
+        malware_scanner=MetadataSafetyValidator(),
         sessions=PostgresStreamSessionRepository(sessions),
         jobs=PostgresProcessingJobRepository(sessions),
         storage=minio,

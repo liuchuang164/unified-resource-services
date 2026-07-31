@@ -70,6 +70,34 @@ class UnifiedEntry:
         self.clock = clock
         self.api_version = api_version
 
+    async def consume_range_reference(self, reference_id: str) -> tuple[Any, Any, Any]:
+        """Authorize a one-time data-plane read by consuming its pre-authorized grant."""
+        started = monotonic()
+        grant, resource, stream = await self.use_cases.consume_range_access(reference_id)
+        await self.audit.write(
+            AuditEvent(
+                audit_id=f"audit_range_{grant.request_id}",
+                request_id=grant.request_id,
+                trace_id=grant.trace_id,
+                tenant_id=grant.tenant_id,
+                biz_domain=grant.biz_domain,
+                caller_type=grant.caller_type,
+                caller_id=grant.caller_id,
+                operation="file.read_range.stream",
+                resource_id=grant.resource_id,
+                session_id=None,
+                job_id=None,
+                decision="ALLOW",
+                result="SUCCESS",
+                error_code=None,
+                duration_ms=int((monotonic() - started) * 1000),
+                created_at=self.clock.now(),
+                offset=grant.offset,
+                length=grant.length,
+            )
+        )
+        return grant, resource, stream
+
     async def execute(
         self, request: UnifiedRequest, source: Literal["business", "gateway"] = "business"
     ) -> UnifiedResponse:

@@ -2,9 +2,9 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from file_media_stream_service.application.dto import (
     ToolExecuteRequest,
@@ -118,6 +118,27 @@ def create_app(
             return await container.gateway.execute(request)
         except ToolNotExecutable as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.get("/api/v1/files/range", response_model=None)
+    async def stream_file_range(
+        reference_id: str = Header(alias="X-Range-Access-Reference"),
+    ) -> StreamingResponse:
+        try:
+            grant, resource, stream = await container.entry.consume_range_reference(reference_id)
+        except Exception as error:
+            raise HTTPException(status_code=403, detail="Range access denied") from error
+        end = grant.offset + grant.length - 1
+        return StreamingResponse(
+            stream,
+            status_code=206,
+            media_type=resource.mime_type,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(grant.length),
+                "Content-Range": f"bytes {grant.offset}-{end}/{resource.size_bytes}",
+                "Cache-Control": "no-store",
+            },
+        )
 
     return app
 

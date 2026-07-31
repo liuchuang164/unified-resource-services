@@ -15,6 +15,13 @@ TOOL_OPERATIONS: dict[str, str | None] = {
     "file_media.list_tools": None,
     "file_media.get_tool_schema": None,
     "file.initialize_upload": "file.initialize_upload",
+    "file.create_upload_session": "file.initialize_upload",
+    "file.complete_upload": "file.complete_upload",
+    "file.abort_upload": "file.abort_upload",
+    "file.create_download_url": "file.create_download_url",
+    "file.read_range": "file.read_range",
+    "file.get_metadata": "file.get_metadata",
+    "file.delete_file": "file.delete_file",
     "file.get_resource": "file.get_resource",
     "media.create_stream_session": "media.create_stream_session",
     "media.get_stream_session": "media.get_stream_session",
@@ -36,6 +43,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     **_METADATA_SCHEMAS,
     **{operation: model.model_json_schema() for operation, model in PAYLOAD_MODELS.items()},
 }
+TOOL_SCHEMAS["file.create_upload_session"] = PAYLOAD_MODELS[
+    "file.initialize_upload"
+].model_json_schema()
 
 
 class ToolNotExecutable(ValueError):
