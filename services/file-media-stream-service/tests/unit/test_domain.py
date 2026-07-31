@@ -33,6 +33,7 @@ def test_file_resource_creation_and_transition() -> None:
         NOW,
     )
     resource.transition_to(FileResourceStatus.UPLOADING)
+    resource.transition_to(FileResourceStatus.VERIFYING)
     resource.transition_to(FileResourceStatus.AVAILABLE)
     assert resource.status is FileResourceStatus.AVAILABLE
     assert resource.tenant_id == "tenant-a"

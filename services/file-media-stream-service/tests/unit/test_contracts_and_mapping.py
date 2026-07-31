@@ -48,4 +48,5 @@ def test_tool_mapping_and_schema_are_frozen() -> None:
     assert TOOL_OPERATIONS["file.initialize_upload"] == "file.initialize_upload"
     assert TOOL_OPERATIONS["media.submit_processing_job"] == "media.submit_processing_job"
     assert TOOL_SCHEMAS["file.initialize_upload"]["additionalProperties"] is False
-    assert len(TOOL_OPERATIONS) == 9
+    assert len(TOOL_OPERATIONS) == 16
+    assert TOOL_OPERATIONS["file.read_range"] == "file.read_range"
