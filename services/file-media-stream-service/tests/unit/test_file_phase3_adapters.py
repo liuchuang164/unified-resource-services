@@ -5,9 +5,13 @@ from typing import Any
 import pytest
 
 from file_media_stream_service.adapters.coordination.redis import RedisRangeAccessGrantStore
+from file_media_stream_service.adapters.file_commit_reconciliation import (
+    FileMetadataCommitReconciler,
+)
 from file_media_stream_service.adapters.file_verification import MetadataSafetyValidator
 from file_media_stream_service.adapters.object_storage import InMemoryObjectStorage
 from file_media_stream_service.adapters.object_storage.minio import MinioObjectStorage
+from file_media_stream_service.adapters.persistence import InMemoryReconciliationStore
 from file_media_stream_service.adapters.production_boundaries import (
     ExternalSecurityBoundary,
     StructuredEventBus,
@@ -58,9 +62,11 @@ class FakeMinioClient:
     def __init__(self) -> None:
         self.content = b"abcdef"
         self.removed: list[str] = []
+        self.multipart_headers: dict[str, str] = {}
 
     def _create_multipart_upload(self, bucket: str, key: str, headers: dict[str, str]) -> str:
-        del bucket, key, headers
+        del bucket, key
+        self.multipart_headers = headers
         return "provider-upload"
 
     def _complete_multipart_upload(self, *args: Any) -> None:
@@ -139,6 +145,46 @@ async def test_in_memory_multipart_storage_boundaries() -> None:
 
 
 @pytest.mark.asyncio
+async def test_file_commit_reconciler_records_delete_effects() -> None:
+    reconciliation = InMemoryReconciliationStore()
+    tracker = FileMetadataCommitReconciler(reconciliation)
+    tracker.begin()
+    tracker.register_delete("tenant", "legal", "resource", "version")
+    tracker.register_delete("tenant", "legal", "resource", None)
+    await tracker.reconcile()
+    pending = await reconciliation.list_pending("FILE_DELETE_PENDING")
+    assert {key for key, _ in pending} == {
+        "file-delete:resource:version",
+        "file-delete:resource:all",
+    }
+    tracker.clear()
+
+
+@pytest.mark.asyncio
+async def test_in_memory_stream_upload_enforces_declared_length() -> None:
+    storage = InMemoryObjectStorage()
+    oversized = await storage.create_multipart_upload("safe/oversized")
+
+    async def oversized_content():
+        yield b"abcd"
+
+    with pytest.raises(ValueError, match="exceeds"):
+        await storage.upload_part_stream(
+            "safe/oversized", oversized.provider_upload_id, 1, oversized_content(), 3
+        )
+
+    short = await storage.create_multipart_upload("safe/short")
+
+    async def short_content():
+        yield b"a"
+
+    with pytest.raises(ValueError, match="does not match"):
+        await storage.upload_part_stream(
+            "safe/short", short.provider_upload_id, 1, short_content(), 2
+        )
+
+
+@pytest.mark.asyncio
 async def test_redis_range_reference_is_atomic_and_one_time() -> None:
     redis = FakeRedis()
     store = RedisRangeAccessGrantStore(redis)  # type: ignore[arg-type]
@@ -170,8 +216,9 @@ async def test_minio_phase3_adapter_operations() -> None:
         "minio_upload_"
     )
     assert await storage.presigned_upload_url("safe/key") == "https://minio.invalid/upload"
-    handle = await storage.create_multipart_upload("safe/key")
+    handle = await storage.create_multipart_upload("safe/key", "text/plain")
     assert handle.provider_upload_id == "provider-upload"
+    assert client.multipart_headers == {"Content-Type": "text/plain"}
     metadata = await storage.complete_multipart_upload(
         "safe/key", handle.provider_upload_id, ((1, "etag"),)
     )

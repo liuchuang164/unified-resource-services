@@ -58,11 +58,9 @@ async def test_business_and_agent_pipeline_use_real_production_infrastructure() 
     security = FakeSecurity(
         rules=(
             AuthorizationRule(
-                "service-e2e", "tenant-e2e", "legal", "file.initialize_upload", allowed=True
+                "service-e2e", "tenant-e2e", "legal", "file:create_upload", allowed=True
             ),
-            AuthorizationRule(
-                "agent-e2e", "tenant-e2e", "legal", "file.get_resource", allowed=True
-            ),
+            AuthorizationRule("agent-e2e", "tenant-e2e", "legal", "file:read", allowed=True),
         ),
         valid_tokens=frozenset({"test-only-capability"}),
     )

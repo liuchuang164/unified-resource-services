@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 from typing import Any
 
 import pytest
@@ -8,12 +10,18 @@ from sqlalchemy import select
 
 from file_media_stream_service.adapters.clock import SystemClock, UuidIdentifierFactory
 from file_media_stream_service.adapters.event_bus import InMemoryEventBus
+from file_media_stream_service.adapters.file_commit_reconciliation import (
+    FileMetadataCommitReconciler,
+)
 from file_media_stream_service.adapters.media_server import InMemoryMediaServer
 from file_media_stream_service.adapters.object_storage.minio import (
     MinioObjectStorage,
     create_minio_client,
 )
 from file_media_stream_service.adapters.persistence import (
+    InMemoryFileRepository,
+    InMemoryFileUploadSessionRepository,
+    InMemoryFileVersionRepository,
     InMemoryProcessingJobRepository,
     InMemoryReconciliationStore,
     InMemoryState,
@@ -26,6 +34,7 @@ from file_media_stream_service.adapters.persistence.postgres import (
 )
 from file_media_stream_service.adapters.persistence.postgres.models import FileResourceRow
 from file_media_stream_service.adapters.processors import InMemoryProcessor
+from file_media_stream_service.adapters.range_access import InMemoryUploadPartGrantStore
 from file_media_stream_service.application.dto import RequestContext
 from file_media_stream_service.application.use_cases import UseCases
 from file_media_stream_service.bootstrap import ProductionContainer, build_container
@@ -126,6 +135,83 @@ def test_final_commit_failure_compensates_provider_and_lease() -> None:
     assert any(kind == "STREAM_PROVIDER_ORPHAN" for _, kind, _ in local.reconciliation.recorded)
 
 
+def test_final_commit_failure_records_completed_file_metadata_reconciliation() -> None:
+    local = build_container(Settings(environment="test"))
+    assert not isinstance(local, ProductionContainer)
+    tracker = FileMetadataCommitReconciler(local.reconciliation)
+    local.entry.use_cases.file_metadata_commit_tracker = tracker
+    context = RequestContext(
+        request_id="commit-failure-file-setup",
+        trace_id="commit-failure-file",
+        tenant_id="dev-tenant",
+        biz_domain="development",
+        caller_type="service",
+        caller_id="dev-service",
+        idempotency_key="commit-failure-file-setup",
+    )
+
+    async def prepare() -> tuple[dict[str, object], str]:
+        content = b"commit-failure"
+        initialized = await local.entry.use_cases.initialize_upload(
+            context,
+            {
+                "filename": "commit-failure.bin",
+                "owner_type": "case",
+                "owner_id": "case",
+                "mime_type": "application/octet-stream",
+                "size_bytes": len(content),
+            },
+        )
+        resource_id = str(initialized["resource"]["resource_id"])
+        upload_id = str(initialized["upload_session_id"])
+        references = await local.entry.use_cases.create_upload_part_references(
+            context,
+            {"resource_id": resource_id, "upload_session_id": upload_id, "parts": [1]},
+        )
+        reference = str(references["parts"][0]["upload_reference"])
+        _, etag = await local.entry.use_cases.consume_upload_part(reference, content)
+        return (
+            {
+                "resource_id": resource_id,
+                "upload_id": upload_id,
+                "parts": [{"part_number": 1, "etag": etag}],
+                "checksum": hashlib.sha256(content).hexdigest(),
+            },
+            resource_id,
+        )
+
+    payload, resource_id = asyncio.run(prepare())
+    container = ProductionContainer(
+        entry=local.entry,
+        gateway=local.gateway,
+        transaction=CommitFailure(),  # type: ignore[arg-type]
+        readiness=Ready(),  # type: ignore[arg-type]
+        file_metadata_commit_tracker=tracker,
+    )
+    response = TestClient(create_app(container, Settings(environment="test"))).post(
+        "/api/v1/operations/execute",
+        json={
+            "api_version": "v1",
+            "operation": "file.complete_upload",
+            "context": {
+                "request_id": "commit-failure-file",
+                "trace_id": "commit-failure-file",
+                "tenant_id": "dev-tenant",
+                "biz_domain": "development",
+                "caller_type": "service",
+                "caller_id": "dev-service",
+                "idempotency_key": "commit-failure-file",
+            },
+            "payload": payload,
+        },
+    )
+    assert response.status_code == 503
+    assert any(
+        kind == "FILE_METADATA_SYNC_REQUIRED" and data["resource_id"] == resource_id
+        for _, kind, data in local.reconciliation.recorded
+    )
+
+
 @pytest.mark.asyncio
 async def test_minio_success_then_postgres_failure_is_compensated() -> None:
     state = InMemoryState()
@@ -212,3 +298,72 @@ async def test_minio_failure_does_not_persist_postgres_resource() -> None:
         await sessions().rollback()
         await sessions.remove()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_minio_complete_success_then_metadata_failure_records_reconciliation() -> None:
+    state = InMemoryState()
+    files = InMemoryFileRepository(state)
+    reconciliation = InMemoryReconciliationStore()
+    storage = MinioObjectStorage(
+        create_minio_client("localhost:59000", "fms_local", "fms_local_only_secret", secure=False),
+        "file-media-stream",
+    )
+    use_cases = UseCases(
+        files=files,
+        file_versions=InMemoryFileVersionRepository(state),
+        file_uploads=InMemoryFileUploadSessionRepository(state),
+        upload_part_grants=InMemoryUploadPartGrantStore(),
+        sessions=InMemoryStreamSessionRepository(state),
+        jobs=InMemoryProcessingJobRepository(state),
+        storage=storage,
+        media_server=InMemoryMediaServer(),
+        processor=InMemoryProcessor(),
+        events=InMemoryEventBus(),
+        clock=SystemClock(),
+        ids=UuidIdentifierFactory(),
+        reconciliation=reconciliation,
+    )
+    context = request_context()
+    content = b"minio-completed-content"
+    initialized = await use_cases.initialize_upload(
+        context,
+        {
+            "filename": "complete-failure.txt",
+            "owner_type": "case",
+            "owner_id": "case",
+            "mime_type": "text/plain",
+            "size_bytes": len(content),
+        },
+    )
+    resource_id = str(initialized["resource"]["resource_id"])
+    upload_id = str(initialized["upload_session_id"])
+    references = await use_cases.create_upload_part_references(
+        context,
+        {"resource_id": resource_id, "upload_session_id": upload_id, "parts": [1]},
+    )
+    reference_id = str(references["parts"][0]["upload_reference"])
+    _, etag = await use_cases.consume_upload_part(reference_id, content)
+    object_key = state.files[(context.tenant_id, context.biz_domain, resource_id)].object_key
+
+    async def unavailable_save(resource: object) -> None:
+        del resource
+        raise RuntimeError("postgres metadata update failed")
+
+    files.save = unavailable_save  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="postgres"):
+            await use_cases.complete_upload(
+                context,
+                {
+                    "resource_id": resource_id,
+                    "upload_id": upload_id,
+                    "parts": [{"part_number": 1, "etag": etag}],
+                    "checksum": hashlib.sha256(content).hexdigest(),
+                },
+            )
+        assert await storage.exists(object_key)
+        pending = await reconciliation.list_pending("FILE_METADATA_SYNC_REQUIRED")
+        assert pending and pending[0][1]["resource_id"] == resource_id
+    finally:
+        await storage.delete(object_key)

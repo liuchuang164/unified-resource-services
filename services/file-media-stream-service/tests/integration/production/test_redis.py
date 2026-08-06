@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from redis.asyncio import Redis
@@ -9,8 +10,10 @@ from file_media_stream_service.adapters.coordination.redis import (
     RedisCoordination,
     RedisQuotaChecker,
     RedisReplayProtector,
+    RedisUploadPartGrantStore,
 )
 from file_media_stream_service.application.dto import RequestContext
+from file_media_stream_service.domain.entities import UploadPartGrant
 from file_media_stream_service.domain.exceptions import QuotaExceeded, ReplayDetected
 
 pytestmark = pytest.mark.production_integration
@@ -136,4 +139,35 @@ async def test_redis_disconnect_is_not_silently_accepted() -> None:
     assert await coordination.check() is False
     with pytest.raises(ConnectionError):
         await coordination.acquire("fms:test:offline")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_upload_part_grant_is_ttl_bound_one_time_and_opaque() -> None:
+    client = Redis.from_url(REDIS_URL, decode_responses=True)
+    await client.flushdb()
+    store = RedisUploadPartGrantStore(client)
+    grant = UploadPartGrant(
+        reference_id="part-reference-production",
+        resource_id="resource-production",
+        upload_session_id="upload-production",
+        tenant_id="tenant-a",
+        biz_domain="legal",
+        caller_id="service-a",
+        caller_type="service",
+        request_id="request-production",
+        trace_id="trace-production",
+        part_number=3,
+        expires_at=datetime.now(UTC) + timedelta(seconds=30),
+    )
+    await store.issue(grant)
+    keys = await client.keys("*")
+    assert len(keys) == 1
+    assert grant.reference_id not in keys[0]
+    serialized = str(await client.get(keys[0]))
+    assert "object_key" not in serialized
+    assert "minio" not in serialized.lower()
+    assert "content" not in serialized.lower()
+    assert await store.consume(grant.reference_id) == grant
+    assert await store.consume(grant.reference_id) is None
     await client.aclose()

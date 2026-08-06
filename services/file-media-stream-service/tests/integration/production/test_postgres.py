@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from file_media_stream_service.adapters.persistence.postgres import (
     PostgresAuditSink,
     PostgresFileRepository,
+    PostgresFileUploadSessionRepository,
+    PostgresFileVersionRepository,
     PostgresIdempotencyStore,
     PostgresIndependentReconciliationStore,
     PostgresProcessingJobRepository,
@@ -21,6 +23,8 @@ from file_media_stream_service.adapters.persistence.postgres import (
 from file_media_stream_service.adapters.persistence.postgres.models import (
     AuditEventRow,
     FileResourceRow,
+    FileResourceVersionRow,
+    FileUploadSessionRow,
     ProcessingJobRow,
     ReconciliationRecordRow,
     StreamEventRow,
@@ -29,6 +33,8 @@ from file_media_stream_service.adapters.persistence.postgres.models import (
 from file_media_stream_service.domain.entities import (
     AuditEvent,
     FileResource,
+    FileResourceVersion,
+    FileUploadSession,
     ProcessingJob,
     StreamEvent,
     StreamSession,
@@ -39,6 +45,7 @@ from file_media_stream_service.domain.enums import (
     StreamConnectionState,
     StreamEventType,
     StreamSessionStatus,
+    UploadSessionStatus,
 )
 
 pytestmark = pytest.mark.production_integration
@@ -152,6 +159,82 @@ async def test_repository_scope_rollback_unique_audit_and_reconciliation() -> No
         await reconciliation.resolve("recon_pg", "tenant_a", "files")
         await sessions().commit()
     finally:
+        await sessions.remove()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_file_version_and_upload_session_production_round_trip() -> None:
+    engine = create_engine(DATABASE_URL, 2, 1, 3)
+    sessions = create_session_registry(engine)
+    versions = PostgresFileVersionRepository(sessions)
+    uploads = PostgresFileUploadSessionRepository(sessions)
+    now = datetime.now(UTC)
+    version = FileResourceVersion(
+        version_id="version-phase31",
+        resource_id="resource-phase31",
+        tenant_id="tenant-phase31",
+        biz_domain="legal",
+        version=2,
+        object_key="tenant-phase31/legal/resource-phase31/v2/phase31.bin",
+        size_bytes=6,
+        checksum=None,
+        status=FileResourceStatus.PENDING_UPLOAD,
+        created_at=now,
+        mime_type="application/octet-stream",
+    )
+    upload = FileUploadSession(
+        upload_id="upload-phase31",
+        resource_id=version.resource_id,
+        tenant_id=version.tenant_id,
+        biz_domain=version.biz_domain,
+        provider_upload_id="provider-phase31",
+        upload_reference="opaque-phase31",
+        expires_at=now + timedelta(minutes=5),
+        status=UploadSessionStatus.INIT,
+        version_id=version.version_id,
+        created_at=now,
+        updated_at=now,
+    )
+    try:
+        await sessions().execute(
+            FileUploadSessionRow.__table__.delete().where(
+                FileUploadSessionRow.upload_id == upload.upload_id
+            )
+        )
+        await sessions().execute(
+            FileResourceVersionRow.__table__.delete().where(
+                FileResourceVersionRow.version_id == version.version_id
+            )
+        )
+        await versions.add(version)
+        await uploads.add(upload)
+        upload.authorize_parts((1, 2, 3), now)
+        upload.part_uploaded(2, now)
+        await uploads.save(upload)
+        await sessions().commit()
+        await sessions.remove()
+
+        loaded_version = await versions.get_by_scope_and_id(
+            version.tenant_id, version.biz_domain, version.version_id
+        )
+        loaded_upload = await uploads.get_by_scope_and_id(
+            upload.tenant_id, upload.biz_domain, upload.upload_id
+        )
+        assert loaded_version is not None
+        assert loaded_version.checksum is None
+        assert loaded_version.mime_type == version.mime_type
+        assert loaded_upload is not None
+        assert loaded_upload.status is UploadSessionStatus.UPLOADING
+        assert loaded_upload.total_parts == 3
+        assert loaded_upload.uploaded_parts == (2,)
+        assert loaded_upload.version_id == version.version_id
+        assert (
+            await uploads.get_by_scope_and_id("other-tenant", upload.biz_domain, upload.upload_id)
+            is None
+        )
+    finally:
+        await sessions().rollback()
         await sessions.remove()
         await engine.dispose()
 

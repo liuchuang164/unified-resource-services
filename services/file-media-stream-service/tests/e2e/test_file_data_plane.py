@@ -9,6 +9,28 @@ from file_media_stream_service.domain.enums import FileResourceStatus
 from file_media_stream_service.domain.exceptions import FileResourceNotFound
 
 
+async def _upload_part(
+    container: Container,
+    context: RequestContext,
+    *,
+    resource_id: str,
+    upload_session_id: str,
+    content: bytes,
+    part_number: int = 1,
+) -> str:
+    references = await container.entry.use_cases.create_upload_part_references(
+        context,
+        {
+            "resource_id": resource_id,
+            "upload_session_id": upload_session_id,
+            "parts": [part_number],
+        },
+    )
+    reference_id = references["parts"][0]["upload_reference"]
+    _, etag = await container.entry.use_cases.consume_upload_part(reference_id, content)
+    return etag
+
+
 @pytest.mark.asyncio
 async def test_file_lifecycle_and_one_time_range_reference(
     container: Container, client: TestClient
@@ -34,7 +56,13 @@ async def test_file_lifecycle_and_one_time_range_reference(
     )
     upload_id = initialized["upload_id"]
     upload = container.state.file_uploads[("dev-tenant", "development", upload_id)]
-    etag = await container.storage.upload_part(upload.provider_upload_id, 1, content)
+    etag = await _upload_part(
+        container,
+        context,
+        resource_id=upload.resource_id,
+        upload_session_id=upload_id,
+        content=content,
+    )
     completed = await container.entry.use_cases.complete_upload(
         context,
         {
@@ -165,7 +193,13 @@ async def test_checksum_mismatch_marks_resource_failed(container: Container) -> 
     )
     upload_id = initialized["upload_id"]
     upload = container.state.file_uploads[("dev-tenant", "development", upload_id)]
-    etag = await container.storage.upload_part(upload.provider_upload_id, 1, b"abc")
+    etag = await _upload_part(
+        container,
+        context,
+        resource_id=upload.resource_id,
+        upload_session_id=upload_id,
+        content=b"abc",
+    )
     with pytest.raises(ValueError, match="metadata"):
         await container.entry.use_cases.complete_upload(
             context,
@@ -228,7 +262,13 @@ async def test_post_storage_metadata_failure_records_reconciliation(
     )
     upload_id = initialized["upload_id"]
     upload = container.state.file_uploads[("dev-tenant", "development", upload_id)]
-    etag = await container.storage.upload_part(upload.provider_upload_id, 1, content)
+    etag = await _upload_part(
+        container,
+        context,
+        resource_id=upload.resource_id,
+        upload_session_id=upload_id,
+        content=content,
+    )
 
     async def unavailable_save(resource: object) -> None:
         del resource

@@ -27,11 +27,17 @@ async def test_upload_multipart_metadata_range_urls_delete_and_abort(
     )
     upload_url = await storage.presigned_upload_url(key)
     assert "X-Amz-Signature=" in upload_url
-    upload = await storage.begin_multipart(key)
+    upload = await storage.begin_multipart(key, "text/plain")
     data = os.urandom(6_000_000)
-    etag = await storage.upload_part(upload, 1, data)
+
+    async def chunks():
+        for offset in range(0, len(data), 64 * 1024):
+            yield data[offset : offset + 64 * 1024]
+
+    etag = await storage.upload_part_stream(key, upload.upload_id, 1, chunks(), len(data))
     metadata = await storage.complete_multipart(upload, [(1, etag)])
     assert metadata.size_bytes == len(data)
+    assert metadata.content_type == "text/plain"
     assert await storage.exists(key)
     assert await storage.read_range(key, 10, 20) == data[10:30]
     download_url = await storage.presigned_download_url(key)
