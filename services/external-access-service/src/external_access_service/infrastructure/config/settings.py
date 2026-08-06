@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     farui_token: str | None = None
     farui_enabled: bool = True
     allow_fake_credentials: bool = True
+    allow_legacy_body_context: bool = True
+    capability_secret: str = "test-capability-secret"
+    capability_issuer: str = "hermes"
     max_concurrency: int = Field(default=8, ge=1, le=64)
 
     @model_validator(mode="after")

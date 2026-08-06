@@ -11,6 +11,9 @@ SENSITIVE_KEYS = {
     "secret_key",
     "signature",
     "token",
+    "request_body",
+    "body",
+    "payload",
 }
 
 
