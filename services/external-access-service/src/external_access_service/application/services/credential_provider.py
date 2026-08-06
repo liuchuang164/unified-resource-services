@@ -122,8 +122,8 @@ class EnvironmentCredentialProvider(CredentialProviderPort):
             values = {row[0].strip(): row[1].strip() for row in csv.reader(handle) if len(row) >= 2}
         api_key = values.get("apiKey") or values.get("api_key")
         endpoint = (
-            values.get("dashScope")
-            or values.get("openAiCompatible")
+            values.get("openAiCompatible")
+            or values.get("dashScope")
             or values.get("apiHost")
             or values.get("endpoint")
         )
@@ -133,6 +133,8 @@ class EnvironmentCredentialProvider(CredentialProviderPort):
             "api_key": api_key or "",
             "endpoint": endpoint or "",
             "workspace_id": values.get("workspaceId", ""),
-            "model": values.get("model") or values.get("id") or "farui",
+            "model": values.get("model")
+            or ("qwen-plus" if endpoint and "compatible-mode" in endpoint else values.get("id"))
+            or "qwen-plus",
             "auth_mode": "workspace_api_key",
         }
