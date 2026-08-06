@@ -12,9 +12,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "file_resource", sa.Column("current_version_id", sa.String(128), nullable=True)
-    )
+    op.add_column("file_resource", sa.Column("current_version_id", sa.String(128), nullable=True))
     op.add_column(
         "file_resource_version",
         sa.Column(
@@ -37,9 +35,7 @@ def upgrade() -> None:
         "file_upload_session",
         sa.Column("uploaded_parts", sa.JSON(), nullable=False, server_default="[]"),
     )
-    op.add_column(
-        "file_upload_session", sa.Column("version_id", sa.String(128), nullable=True)
-    )
+    op.add_column("file_upload_session", sa.Column("version_id", sa.String(128), nullable=True))
     op.add_column(
         "file_upload_session",
         sa.Column(
@@ -78,9 +74,7 @@ def downgrade() -> None:
     # its NOT NULL constraint.
     op.execute(
         sa.text(
-            "UPDATE file_resource_version "
-            "SET checksum = repeat('0', 64) "
-            "WHERE checksum IS NULL"
+            "UPDATE file_resource_version SET checksum = repeat('0', 64) WHERE checksum IS NULL"
         )
     )
     op.alter_column("file_resource_version", "checksum", nullable=False)
