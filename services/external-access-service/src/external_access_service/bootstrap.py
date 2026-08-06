@@ -4,10 +4,16 @@ import httpx
 
 from external_access_service.application.context import ContextResolver
 from external_access_service.application.governance import (
+    CircuitBreakerService,
     PolicyRule,
     PolicyService,
+    QuotaPolicy,
+    QuotaPolicyRepository,
     QuotaRule,
     QuotaService,
+    RateLimitRule,
+    RateLimitService,
+    RetryPolicyService,
     UsageMeterService,
 )
 from external_access_service.application.security import CapabilityVerifier
@@ -31,7 +37,6 @@ from external_access_service.infrastructure.providers.ali_farui import (
     farui_mock_transport,
 )
 from external_access_service.interfaces.eag.gateway import ToolGateway
-from external_access_service.security.fake import InMemoryRateLimiter
 
 
 @dataclass(slots=True)
@@ -43,6 +48,9 @@ class Container:
     usage_repository: UsageRepository
     usage_meter: UsageMeterService
     quota: QuotaService
+    quota_policy_repository: QuotaPolicyRepository
+    rate_limiter: RateLimitService
+    circuit_breaker: CircuitBreakerService
     policy: PolicyService
     context_resolver: ContextResolver
     capability: CapabilityVerifier
@@ -58,6 +66,26 @@ def build_container(
     audit = PersistentAuditRepository()
     usage_repository = UsageRepository()
     usage_meter = UsageMeterService(usage_repository)
+    quota_policy_repository = QuotaPolicyRepository(
+        (
+            QuotaPolicy(
+                id="quota_tenant_a_research",
+                tenant_id="tenant_A",
+                biz_domain="LEGAL",
+                operation="ALI_FARUI_LEGAL_RESEARCH_FULL",
+                provider=ProviderCode.ALI_FARUI,
+                limit_value=100,
+            ),
+            QuotaPolicy(
+                id="quota_tenant_a_provider",
+                tenant_id="tenant_A",
+                biz_domain="LEGAL",
+                operation=None,
+                provider=ProviderCode.ALI_FARUI,
+                limit_value=1000,
+            ),
+        )
+    )
     quota = QuotaService(
         (
             QuotaRule(
@@ -67,8 +95,22 @@ def build_container(
                 provider=ProviderCode.ALI_FARUI,
                 daily_limit=100,
             ),
+        ),
+        repository=quota_policy_repository,
+    )
+    rate_limiter = RateLimitService(
+        (
+            RateLimitRule(
+                tenant_id="tenant_A",
+                biz_domain="LEGAL",
+                operation=None,
+                provider=ProviderCode.ALI_FARUI,
+                capacity=100,
+                refill_per_second=100,
+            ),
         )
     )
+    circuit_breaker = CircuitBreakerService()
     rules = tuple(
         PolicyRule(
             tenant_id="tenant_A",
@@ -96,10 +138,12 @@ def build_container(
             EnvironmentCredentialProvider(settings)
         ),
         policy=policy,
-        rate_limiter=InMemoryRateLimiter(),
+        rate_limiter=rate_limiter,
         audit=audit,
         quota=quota,
         usage_meter=usage_meter,
+        circuit_breaker=circuit_breaker,
+        retry_policy=RetryPolicyService(),
     )
     return Container(
         entry=entry,
@@ -109,6 +153,9 @@ def build_container(
         usage_repository=usage_repository,
         usage_meter=usage_meter,
         quota=quota,
+        quota_policy_repository=quota_policy_repository,
+        rate_limiter=rate_limiter,
+        circuit_breaker=circuit_breaker,
         policy=policy,
         context_resolver=context_resolver,
         capability=capability,
