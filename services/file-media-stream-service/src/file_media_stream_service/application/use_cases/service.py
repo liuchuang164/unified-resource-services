@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 
@@ -12,6 +13,7 @@ from file_media_stream_service.application.ports.media_provider import (
 from file_media_stream_service.application.ports.protocols import (
     Clock,
     EventBus,
+    FileMetadataCommitTracker,
     FileRepository,
     FileUploadSessionRepository,
     FileVersionRepository,
@@ -27,15 +29,18 @@ from file_media_stream_service.application.ports.protocols import (
     StreamEventSink,
     StreamSessionRepository,
     TransactionManager,
+    UploadPartGrantStore,
 )
 from file_media_stream_service.domain.entities.models import (
     FileResource,
     FileResourceVersion,
     FileUploadSession,
     ProcessingJob,
+    ProcessorInputReference,
     RangeAccessGrant,
     StreamEvent,
     StreamSession,
+    UploadPartGrant,
 )
 from file_media_stream_service.domain.enums.status import (
     FileResourceStatus,
@@ -43,9 +48,11 @@ from file_media_stream_service.domain.enums.status import (
     StreamConnectionState,
     StreamEventType,
     StreamSessionStatus,
+    UploadSessionStatus,
 )
 from file_media_stream_service.domain.exceptions.errors import (
     FileResourceNotFound,
+    InvalidStateTransition,
     ProcessingJobNotFound,
     StreamSessionNotFound,
 )
@@ -72,6 +79,7 @@ def public_dict(
             "sha256": value.sha256,
             "status": value.status.value,
             "version": value.version,
+            "current_version_id": value.current_version_id,
             "created_by": value.created_by,
             "created_at": value.created_at.isoformat(),
             "updated_at": value.updated_at.isoformat(),
@@ -104,6 +112,12 @@ def public_dict(
     }
 
 
+class UploadPartTransferFailed(RuntimeError):
+    def __init__(self, grant: UploadPartGrant) -> None:
+        super().__init__("Upload part transfer failed")
+        self.grant = grant
+
+
 def canonical_request_hash(payload: dict[str, Any]) -> str:
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(serialized.encode()).hexdigest()
@@ -128,12 +142,15 @@ class UseCases:
         stream_events: StreamEventSink | None = None,
         transactions: TransactionManager | None = None,
         provisioning_compensator: ProvisioningCompensator | None = None,
+        file_metadata_commit_tracker: FileMetadataCommitTracker | None = None,
         file_versions: FileVersionRepository | None = None,
         file_uploads: FileUploadSessionRepository | None = None,
         range_grants: RangeAccessGrantStore | None = None,
         malware_scanner: MalwareScannerPort | None = None,
         upload_ttl_seconds: int = 900,
         range_grant_ttl_seconds: int = 60,
+        upload_part_grants: UploadPartGrantStore | None = None,
+        upload_part_grant_ttl_seconds: int = 60,
     ) -> None:
         self.files = files
         self.sessions = sessions
@@ -151,12 +168,15 @@ class UseCases:
         self.stream_events = stream_events
         self.transactions = transactions
         self.provisioning_compensator = provisioning_compensator
+        self.file_metadata_commit_tracker = file_metadata_commit_tracker
         self.file_versions = file_versions
         self.file_uploads = file_uploads
         self.range_grants = range_grants
         self.malware_scanner = malware_scanner
         self.upload_ttl_seconds = upload_ttl_seconds
         self.range_grant_ttl_seconds = range_grant_ttl_seconds
+        self.upload_part_grants = upload_part_grants
+        self.upload_part_grant_ttl_seconds = upload_part_grant_ttl_seconds
 
     async def execute(
         self, operation: str, context: RequestContext, payload: dict[str, Any]
@@ -170,6 +190,10 @@ class UseCases:
             "file.read_range": self.issue_range_access,
             "file.get_metadata": self.get_metadata,
             "file.delete_file": self.delete_file,
+            "file.create_upload_part_urls": self.create_upload_part_references,
+            "file.create_version_upload": self.create_version_upload,
+            "file.switch_current_version": self.switch_current_version,
+            "file.delete_version": self.delete_version,
             "media.create_stream_session": self.create_stream_session,
             "media.get_stream_session": self.get_stream_session,
             "media.close_stream_session": self.close_stream_session,
@@ -208,7 +232,8 @@ class UseCases:
         upload_reference = await self.storage.initialize_upload(
             object_key, resource.mime_type, resource.size_bytes
         )
-        handle = await self.storage.create_multipart_upload(object_key)
+        handle = await self.storage.create_multipart_upload(object_key, str(payload["mime_type"]))
+        version_id = self.ids.new_id("ver")
         upload = FileUploadSession(
             upload_id=self.ids.new_id("upl"),
             resource_id=resource_id,
@@ -217,11 +242,30 @@ class UseCases:
             provider_upload_id=handle.provider_upload_id,
             upload_reference=upload_reference,
             expires_at=self.clock.now() + timedelta(seconds=self.upload_ttl_seconds),
+            status=UploadSessionStatus.INIT,
+            version_id=version_id,
+            created_at=self.clock.now(),
+            updated_at=self.clock.now(),
+        )
+        version = FileResourceVersion(
+            version_id=version_id,
+            resource_id=resource.resource_id,
+            tenant_id=resource.tenant_id,
+            biz_domain=resource.biz_domain,
+            version=1,
+            object_key=resource.object_key,
+            size_bytes=resource.size_bytes,
+            checksum=None,
+            status=FileResourceStatus.PENDING_UPLOAD,
+            created_at=self.clock.now(),
+            mime_type=resource.mime_type,
         )
         try:
             await self.files.add(resource)
             if self.file_uploads is not None:
                 await self.file_uploads.add(upload)
+            if self.file_versions is not None:
+                await self.file_versions.add(version)
         except Exception:
             await self.storage.abort_multipart_upload(object_key, handle.provider_upload_id)
             raise
@@ -255,6 +299,7 @@ class UseCases:
         return {
             "resource": public_dict(resource),
             "upload_id": upload.upload_id,
+            "upload_session_id": upload.upload_id,
             "upload_reference": upload_reference,
             "expires_at": upload.expires_at.isoformat(),
         }
@@ -264,52 +309,64 @@ class UseCases:
     ) -> dict[str, Any]:
         resource = await self._file(context, str(payload["resource_id"]))
         upload = await self._upload(context, str(payload["upload_id"]))
-        if upload.resource_id != resource.resource_id or upload.aborted:
+        if upload.resource_id != resource.resource_id:
             raise FileResourceNotFound("File upload not found")
-        if upload.completed and resource.status is FileResourceStatus.AVAILABLE:
-            return {"resource": public_dict(resource)}
-        resource.transition_to(FileResourceStatus.UPLOADING)
+        if upload.status is UploadSessionStatus.COMPLETED:
+            return await self._complete_result(resource, upload)
+        await self._ensure_upload_active(upload)
         parts = tuple((int(part["part_number"]), str(part["etag"])) for part in payload["parts"])
+        part_numbers = {number for number, _ in parts}
+        expected_parts = set(range(1, upload.total_parts + 1))
+        if part_numbers != set(upload.uploaded_parts) or part_numbers != expected_parts:
+            raise ValueError("Completed parts do not match uploaded parts")
+        version = await self._version_for_upload(context, upload)
+        is_initial_version = resource.current_version_id is None
+        if is_initial_version:
+            resource.transition_to(FileResourceStatus.UPLOADING)
+        version.transition_to(FileResourceStatus.UPLOADING)
         try:
             metadata = await self.storage.complete_multipart_upload(
-                resource.object_key, upload.provider_upload_id, parts
+                version.object_key, upload.provider_upload_id, parts
             )
-            resource.transition_to(FileResourceStatus.VERIFYING)
+            if self.file_metadata_commit_tracker is not None:
+                self.file_metadata_commit_tracker.register(
+                    context.tenant_id,
+                    context.biz_domain,
+                    resource.resource_id,
+                    version.version_id,
+                )
+            version.transition_to(FileResourceStatus.VERIFYING)
+            if is_initial_version:
+                resource.transition_to(FileResourceStatus.VERIFYING)
             checksum = str(payload["checksum"]).lower()
-            if metadata.size_bytes != resource.size_bytes or metadata.checksum.lower() != checksum:
+            if metadata.size_bytes != version.size_bytes or metadata.checksum.lower() != checksum:
                 raise ValueError("uploaded object metadata does not match declaration")
-            if metadata.content_type and metadata.content_type != resource.mime_type:
+            if metadata.content_type and metadata.content_type != version.mime_type:
                 raise ValueError("uploaded object content type does not match declaration")
             if self.malware_scanner is not None:
                 await self.malware_scanner.validate_metadata(
                     resource.normalized_filename,
-                    resource.mime_type,
+                    version.mime_type,
                     metadata.size_bytes,
                     metadata.checksum,
                 )
-            resource.sha256 = metadata.checksum.lower()
-            resource.transition_to(FileResourceStatus.AVAILABLE)
-            await self.files.save(resource)
+            version.checksum = metadata.checksum.lower()
+            version.transition_to(FileResourceStatus.AVAILABLE)
             if self.file_versions is not None:
-                await self.file_versions.add(
-                    FileResourceVersion(
-                        version_id=self.ids.new_id("ver"),
-                        resource_id=resource.resource_id,
-                        tenant_id=resource.tenant_id,
-                        biz_domain=resource.biz_domain,
-                        version=resource.version,
-                        object_key=resource.object_key,
-                        size_bytes=resource.size_bytes,
-                        checksum=resource.sha256,
-                        status=resource.status,
-                        created_at=self.clock.now(),
-                    )
-                )
-            upload.completed = True
+                await self.file_versions.save(version)
+            if is_initial_version:
+                self._apply_current_version(resource, version)
+                resource.transition_to(FileResourceStatus.AVAILABLE)
+                await self.files.save(resource)
+            upload.mark_completed(self.clock.now())
             if self.file_uploads is not None:
                 await self.file_uploads.save(upload)
         except Exception:
-            if resource.status in {
+            if version.status in {FileResourceStatus.UPLOADING, FileResourceStatus.VERIFYING}:
+                version.transition_to(FileResourceStatus.FAILED)
+                if self.file_versions is not None:
+                    await self.file_versions.save(version)
+            if is_initial_version and resource.status in {
                 FileResourceStatus.UPLOADING,
                 FileResourceStatus.VERIFYING,
             }:
@@ -326,7 +383,7 @@ class UseCases:
                             "resource_id": resource.resource_id,
                         },
                     )
-            elif resource.status is FileResourceStatus.AVAILABLE:
+            elif version.status is FileResourceStatus.AVAILABLE:
                 await self.reconciliation.record(
                     f"file-metadata:{resource.resource_id}",
                     "FILE_METADATA_SYNC_REQUIRED",
@@ -337,7 +394,7 @@ class UseCases:
                     },
                 )
             raise
-        return {"resource": public_dict(resource)}
+        return await self._complete_result(resource, upload)
 
     async def abort_upload(
         self, context: RequestContext, payload: dict[str, Any]
@@ -346,11 +403,18 @@ class UseCases:
         upload = await self._upload(context, str(payload["upload_id"]))
         if upload.resource_id != resource.resource_id:
             raise FileResourceNotFound("File upload not found")
-        if not upload.aborted:
-            await self.storage.abort_multipart_upload(
-                resource.object_key, upload.provider_upload_id
-            )
-            upload.aborted = True
+        if upload.status not in {UploadSessionStatus.ABORTED, UploadSessionStatus.COMPLETED}:
+            version = await self._version_for_upload(context, upload)
+            await self.storage.abort_multipart_upload(version.object_key, upload.provider_upload_id)
+            upload.mark_aborted(self.clock.now())
+            if version.status in {
+                FileResourceStatus.PENDING_UPLOAD,
+                FileResourceStatus.UPLOADING,
+                FileResourceStatus.VERIFYING,
+            }:
+                version.transition_to(FileResourceStatus.FAILED)
+                if self.file_versions is not None:
+                    await self.file_versions.save(version)
             if self.file_uploads is not None:
                 await self.file_uploads.save(upload)
             if resource.status in {
@@ -360,6 +424,222 @@ class UseCases:
                 resource.transition_to(FileResourceStatus.FAILED)
                 await self.files.save(resource)
         return {"resource": public_dict(resource)}
+
+    async def create_upload_part_references(
+        self, context: RequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        resource = await self._file(context, str(payload["resource_id"]))
+        upload = await self._upload(context, str(payload["upload_session_id"]))
+        if upload.resource_id != resource.resource_id:
+            raise FileResourceNotFound("File upload not found")
+        if self.upload_part_grants is None:
+            raise RuntimeError("Upload part grant store is unavailable")
+        now = self.clock.now()
+        parts = tuple(sorted(set(int(part) for part in payload["parts"])))
+        await self._ensure_upload_active(upload)
+        upload.authorize_parts(parts, now)
+        expires_at = min(
+            upload.expires_at,
+            now + timedelta(seconds=self.upload_part_grant_ttl_seconds),
+        )
+        references: list[dict[str, Any]] = []
+        for part_number in parts:
+            grant = UploadPartGrant(
+                reference_id=self.ids.new_id("part"),
+                resource_id=resource.resource_id,
+                upload_session_id=upload.upload_id,
+                tenant_id=context.tenant_id,
+                biz_domain=context.biz_domain,
+                caller_id=context.caller_id,
+                caller_type=context.caller_type,
+                request_id=context.request_id,
+                trace_id=context.trace_id,
+                part_number=part_number,
+                expires_at=expires_at,
+            )
+            await self.upload_part_grants.issue(grant)
+            references.append(
+                {
+                    "part_number": part_number,
+                    "upload_reference": grant.reference_id,
+                    "expires_at": expires_at.isoformat(),
+                }
+            )
+        if self.file_uploads is not None:
+            await self.file_uploads.save(upload)
+        return {"parts": references}
+
+    async def consume_upload_part(
+        self, reference_id: str, content: bytes
+    ) -> tuple[UploadPartGrant, str]:
+        grant, upload, version = await self._consume_upload_part_grant(reference_id)
+        try:
+            etag = await self.storage.upload_part_content(
+                version.object_key,
+                upload.provider_upload_id,
+                grant.part_number,
+                content,
+            )
+            await self._mark_part_uploaded(upload, grant.part_number)
+        except Exception as error:
+            raise UploadPartTransferFailed(grant) from error
+        return grant, etag
+
+    async def consume_upload_part_stream(
+        self,
+        reference_id: str,
+        content: AsyncIterator[bytes],
+        content_length: int,
+    ) -> tuple[UploadPartGrant, str]:
+        grant, upload, version = await self._consume_upload_part_grant(reference_id)
+        try:
+            etag = await self.storage.upload_part_stream(
+                version.object_key,
+                upload.provider_upload_id,
+                grant.part_number,
+                content,
+                content_length,
+            )
+            await self._mark_part_uploaded(upload, grant.part_number)
+        except Exception as error:
+            raise UploadPartTransferFailed(grant) from error
+        return grant, etag
+
+    async def _consume_upload_part_grant(
+        self, reference_id: str
+    ) -> tuple[UploadPartGrant, FileUploadSession, FileResourceVersion]:
+        if self.upload_part_grants is None:
+            raise FileResourceNotFound("Upload part reference not found")
+        grant = await self.upload_part_grants.consume(reference_id)
+        if grant is None or grant.expires_at <= self.clock.now():
+            raise FileResourceNotFound("Upload part reference not found")
+        context = RequestContext.model_construct(
+            request_id=grant.request_id,
+            trace_id=grant.trace_id,
+            tenant_id=grant.tenant_id,
+            biz_domain=grant.biz_domain,
+            caller_type=grant.caller_type,
+            caller_id=grant.caller_id,
+        )
+        upload = await self._upload(context, grant.upload_session_id)
+        await self._ensure_upload_active(upload)
+        if upload.resource_id != grant.resource_id:
+            raise FileResourceNotFound("Upload part reference not found")
+        version = await self._version_for_upload(context, upload)
+        return grant, upload, version
+
+    async def _mark_part_uploaded(self, upload: FileUploadSession, part_number: int) -> None:
+        upload.part_uploaded(part_number, self.clock.now())
+        if self.file_uploads is not None:
+            await self.file_uploads.save(upload)
+
+    async def create_version_upload(
+        self, context: RequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        resource = await self._available_file(context, str(payload["resource_id"]))
+        if self.file_versions is None or self.file_uploads is None:
+            raise RuntimeError("File version persistence is unavailable")
+        versions = await self.file_versions.list_by_scope_and_resource(
+            context.tenant_id, context.biz_domain, resource.resource_id
+        )
+        version_number = max((item.version for item in versions), default=0) + 1
+        object_key = generate_object_key(
+            context.tenant_id,
+            context.biz_domain,
+            resource.resource_id,
+            version_number,
+            resource.normalized_filename,
+        )
+        await self.storage.initialize_upload(
+            object_key, str(payload["mime_type"]), int(payload["size_bytes"])
+        )
+        handle = await self.storage.create_multipart_upload(object_key, str(payload["mime_type"]))
+        now = self.clock.now()
+        version = FileResourceVersion(
+            version_id=self.ids.new_id("ver"),
+            resource_id=resource.resource_id,
+            tenant_id=context.tenant_id,
+            biz_domain=context.biz_domain,
+            version=version_number,
+            object_key=object_key,
+            size_bytes=int(payload["size_bytes"]),
+            checksum=None,
+            status=FileResourceStatus.PENDING_UPLOAD,
+            created_at=now,
+            mime_type=str(payload["mime_type"]),
+        )
+        upload = FileUploadSession(
+            upload_id=self.ids.new_id("upl"),
+            resource_id=resource.resource_id,
+            tenant_id=context.tenant_id,
+            biz_domain=context.biz_domain,
+            provider_upload_id=handle.provider_upload_id,
+            upload_reference=self.ids.new_id("upref"),
+            expires_at=now + timedelta(seconds=self.upload_ttl_seconds),
+            status=UploadSessionStatus.INIT,
+            version_id=version.version_id,
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            await self.file_versions.add(version)
+            await self.file_uploads.add(upload)
+        except Exception:
+            await self.storage.abort_multipart_upload(object_key, handle.provider_upload_id)
+            raise
+        return {
+            "resource_id": resource.resource_id,
+            "version": self._public_version(version),
+            "upload_session_id": upload.upload_id,
+            "expires_at": upload.expires_at.isoformat(),
+        }
+
+    async def switch_current_version(
+        self, context: RequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        resource = await self._available_file(context, str(payload["resource_id"]))
+        version = await self._version(context, str(payload["version_id"]))
+        if (
+            version.resource_id != resource.resource_id
+            or version.status is not FileResourceStatus.AVAILABLE
+        ):
+            raise FileResourceNotFound("File version not found")
+        if resource.current_version_id != version.version_id:
+            self._apply_current_version(resource, version)
+            await self.files.save(resource)
+        return {"resource": public_dict(resource), "version": self._public_version(version)}
+
+    async def delete_version(
+        self, context: RequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        resource = await self._file(context, str(payload["resource_id"]))
+        version = await self._version(context, str(payload["version_id"]))
+        if version.resource_id != resource.resource_id:
+            raise FileResourceNotFound("File version not found")
+        if resource.current_version_id == version.version_id:
+            raise ValueError("Current version cannot be deleted")
+        if version.status is FileResourceStatus.DELETED:
+            return {"version": self._public_version(version)}
+        version.transition_to(FileResourceStatus.DELETING)
+        try:
+            await self.storage.delete(version.object_key)
+            if self.file_metadata_commit_tracker is not None:
+                self.file_metadata_commit_tracker.register_delete(
+                    context.tenant_id,
+                    context.biz_domain,
+                    resource.resource_id,
+                    version.version_id,
+                )
+            version.transition_to(FileResourceStatus.DELETED)
+            if self.file_versions is not None:
+                await self.file_versions.save(version)
+        except Exception:
+            version.transition_to(FileResourceStatus.FAILED)
+            if self.file_versions is not None:
+                await self.file_versions.save(version)
+            await self._record_delete_pending(resource, version.version_id)
+            raise
+        return {"version": self._public_version(version)}
 
     async def create_download_url(
         self, context: RequestContext, payload: dict[str, Any]
@@ -435,17 +715,7 @@ class UseCases:
         )
         return {
             "resource": public_dict(resource),
-            "versions": [
-                {
-                    "version_id": item.version_id,
-                    "version": item.version,
-                    "size_bytes": item.size_bytes,
-                    "checksum": item.checksum,
-                    "status": item.status.value,
-                    "created_at": item.created_at.isoformat(),
-                }
-                for item in versions
-            ],
+            "versions": [self._public_version(item) for item in versions],
         }
 
     async def delete_file(self, context: RequestContext, payload: dict[str, Any]) -> dict[str, Any]:
@@ -453,15 +723,191 @@ class UseCases:
         if resource.status is FileResourceStatus.DELETED:
             return {"resource": public_dict(resource)}
         resource.transition_to(FileResourceStatus.DELETING)
+        uploads = (
+            await self.file_uploads.list_by_scope_and_resource(
+                context.tenant_id, context.biz_domain, resource.resource_id
+            )
+            if self.file_uploads is not None
+            else []
+        )
+        versions = (
+            await self.file_versions.list_by_scope_and_resource(
+                context.tenant_id, context.biz_domain, resource.resource_id
+            )
+            if self.file_versions is not None
+            else []
+        )
+        versions_by_id = {version.version_id: version for version in versions}
         try:
-            await self.storage.delete(resource.object_key)
+            for upload in uploads:
+                if upload.status in {
+                    UploadSessionStatus.COMPLETED,
+                    UploadSessionStatus.ABORTED,
+                }:
+                    continue
+                version = versions_by_id.get(upload.version_id or "")
+                if version is None:
+                    raise FileResourceNotFound("File version for upload not found")
+                await self.storage.abort_multipart_upload(
+                    version.object_key, upload.provider_upload_id
+                )
+                if self.file_metadata_commit_tracker is not None:
+                    self.file_metadata_commit_tracker.register_delete(
+                        context.tenant_id,
+                        context.biz_domain,
+                        resource.resource_id,
+                        version.version_id,
+                    )
+                upload.mark_aborted(self.clock.now())
+                if self.file_uploads is not None:
+                    await self.file_uploads.save(upload)
+                if version.status in {
+                    FileResourceStatus.PENDING_UPLOAD,
+                    FileResourceStatus.UPLOADING,
+                    FileResourceStatus.VERIFYING,
+                }:
+                    version.transition_to(FileResourceStatus.FAILED)
+                    if self.file_versions is not None:
+                        await self.file_versions.save(version)
+            for version in versions:
+                if version.status is FileResourceStatus.DELETED:
+                    continue
+                if version.status is not FileResourceStatus.DELETING:
+                    version.transition_to(FileResourceStatus.DELETING)
+                await self.storage.delete(version.object_key)
+                if self.file_metadata_commit_tracker is not None:
+                    self.file_metadata_commit_tracker.register_delete(
+                        context.tenant_id,
+                        context.biz_domain,
+                        resource.resource_id,
+                        version.version_id,
+                    )
+                version.transition_to(FileResourceStatus.DELETED)
+                if self.file_versions is not None:
+                    await self.file_versions.save(version)
+            if not versions:
+                await self.storage.delete(resource.object_key)
+                if self.file_metadata_commit_tracker is not None:
+                    self.file_metadata_commit_tracker.register_delete(
+                        context.tenant_id,
+                        context.biz_domain,
+                        resource.resource_id,
+                        None,
+                    )
             resource.transition_to(FileResourceStatus.DELETED)
         except Exception:
             resource.transition_to(FileResourceStatus.FAILED)
             await self.files.save(resource)
+            await self._record_delete_pending(resource, None)
             raise
         await self.files.save(resource)
         return {"resource": public_dict(resource)}
+
+    async def processor_input_reference(
+        self, context: RequestContext, resource_id: str, version_id: str | None = None
+    ) -> ProcessorInputReference:
+        resource = await self._available_file(context, resource_id)
+        selected_id = version_id or resource.current_version_id
+        if selected_id is None:
+            raise FileResourceNotFound("Current file version not found")
+        version = await self._version(context, selected_id)
+        if (
+            version.resource_id != resource.resource_id
+            or version.status is not FileResourceStatus.AVAILABLE
+        ):
+            raise FileResourceNotFound("File version not found")
+        if version.checksum is None:
+            raise ValueError("File version checksum is unavailable")
+        return ProcessorInputReference(
+            resource_id=resource.resource_id,
+            version_id=version.version_id,
+            tenant_id=context.tenant_id,
+            biz_domain=context.biz_domain,
+            mime_type=version.mime_type,
+            checksum=version.checksum,
+            storage_reference=f"file-resource:{resource.resource_id}:{version.version_id}",
+        )
+
+    async def _complete_result(
+        self, resource: FileResource, upload: FileUploadSession
+    ) -> dict[str, Any]:
+        version = None
+        if self.file_versions is not None and upload.version_id is not None:
+            version = await self.file_versions.get_by_scope_and_id(
+                upload.tenant_id, upload.biz_domain, upload.version_id
+            )
+        result: dict[str, Any] = {"resource": public_dict(resource)}
+        if version is not None:
+            result["version"] = self._public_version(version)
+        return result
+
+    async def _version_for_upload(
+        self, context: RequestContext, upload: FileUploadSession
+    ) -> FileResourceVersion:
+        if upload.version_id is None:
+            resource = await self._file(context, upload.resource_id)
+            return FileResourceVersion(
+                version_id=self.ids.new_id("ver"),
+                resource_id=resource.resource_id,
+                tenant_id=resource.tenant_id,
+                biz_domain=resource.biz_domain,
+                version=resource.version,
+                object_key=resource.object_key,
+                size_bytes=resource.size_bytes,
+                checksum=resource.sha256,
+                status=resource.status,
+                created_at=self.clock.now(),
+                mime_type=resource.mime_type,
+            )
+        return await self._version(context, upload.version_id)
+
+    async def _version(self, context: RequestContext, version_id: str) -> FileResourceVersion:
+        version = (
+            await self.file_versions.get_by_scope_and_id(
+                context.tenant_id, context.biz_domain, version_id
+            )
+            if self.file_versions is not None
+            else None
+        )
+        if version is None:
+            raise FileResourceNotFound("File version not found")
+        return version
+
+    def _apply_current_version(self, resource: FileResource, version: FileResourceVersion) -> None:
+        resource.current_version_id = version.version_id
+        resource.object_key = version.object_key
+        resource.mime_type = version.mime_type
+        resource.size_bytes = version.size_bytes
+        resource.sha256 = version.checksum
+        resource.version = version.version
+        resource.updated_at = self.clock.now()
+
+    @staticmethod
+    def _public_version(version: FileResourceVersion) -> dict[str, Any]:
+        return {
+            "version_id": version.version_id,
+            "resource_id": version.resource_id,
+            "version_number": version.version,
+            "size_bytes": version.size_bytes,
+            "checksum": version.checksum,
+            "mime_type": version.mime_type,
+            "status": version.status.value,
+            "created_at": version.created_at.isoformat(),
+        }
+
+    async def _record_delete_pending(self, resource: FileResource, version_id: str | None) -> None:
+        payload: dict[str, Any] = {
+            "tenant_id": resource.tenant_id,
+            "biz_domain": resource.biz_domain,
+            "resource_id": resource.resource_id,
+        }
+        if version_id is not None:
+            payload["version_id"] = version_id
+        await self.reconciliation.record(
+            f"file-delete:{resource.resource_id}:{version_id or 'all'}",
+            "FILE_DELETE_PENDING",
+            payload,
+        )
 
     async def _file(self, context: RequestContext, resource_id: str) -> FileResource:
         resource = await self.files.get_by_scope_and_id(
@@ -488,6 +934,14 @@ class UseCases:
         if upload is None:
             raise FileResourceNotFound("File upload not found")
         return upload
+
+    async def _ensure_upload_active(self, upload: FileUploadSession) -> None:
+        try:
+            upload.ensure_active(self.clock.now())
+        except InvalidStateTransition:
+            if upload.status is UploadSessionStatus.EXPIRED and self.file_uploads is not None:
+                await self.file_uploads.save(upload)
+            raise
 
     async def get_resource(
         self, context: RequestContext, payload: dict[str, Any]

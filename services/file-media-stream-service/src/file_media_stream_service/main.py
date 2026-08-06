@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -12,8 +12,10 @@ from file_media_stream_service.application.dto import (
     UnifiedRequest,
     UnifiedResponse,
 )
+from file_media_stream_service.application.use_cases.service import UploadPartTransferFailed
 from file_media_stream_service.bootstrap import Container, ProductionContainer, build_container
 from file_media_stream_service.config import Settings
+from file_media_stream_service.domain.exceptions import FileResourceNotFound
 from file_media_stream_service.gateway.registry import ToolNotExecutable
 from file_media_stream_service.observability import configure_logging
 
@@ -38,11 +40,15 @@ def create_app(
             return await call_next(request)
         if container.provisioning_compensator is not None:
             container.provisioning_compensator.begin()
+        if container.file_metadata_commit_tracker is not None:
+            container.file_metadata_commit_tracker.begin()
         try:
             response = await call_next(request)
             await container.transaction.commit()
             if container.provisioning_compensator is not None:
                 container.provisioning_compensator.clear()
+            if container.file_metadata_commit_tracker is not None:
+                container.file_metadata_commit_tracker.clear()
             return response
         except Exception:
             await container.transaction.rollback()
@@ -52,6 +58,11 @@ def create_app(
                     await container.provisioning_compensator.compensate()
                 except Exception:
                     logger.exception("stream provisioning compensation failed")
+            if container.file_metadata_commit_tracker is not None:
+                try:
+                    await container.file_metadata_commit_tracker.reconcile()
+                except Exception:
+                    logger.exception("file metadata reconciliation recording failed")
             return JSONResponse(
                 status_code=503,
                 content={"status": "unavailable", "error": "transaction_failed"},
@@ -136,6 +147,49 @@ def create_app(
                 "Accept-Ranges": "bytes",
                 "Content-Length": str(grant.length),
                 "Content-Range": f"bytes {grant.offset}-{end}/{resource.size_bytes}",
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.put("/api/v1/files/upload-part", response_model=None)
+    async def upload_file_part(
+        request: Request,
+        reference_id: str = Header(alias="X-Upload-Part-Reference"),
+        content_length: int = Header(alias="Content-Length"),
+    ) -> Response:
+        if content_length <= 0:
+            raise HTTPException(status_code=400, detail="Upload part is empty")
+        if content_length > settings.max_upload_part_bytes:
+            raise HTTPException(status_code=413, detail="Upload part is too large")
+
+        async def bounded_stream() -> AsyncIterator[bytes]:
+            received = 0
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > content_length:
+                    raise ValueError("Upload part exceeds declared content length")
+                yield chunk
+            if received != content_length:
+                raise ValueError("Upload part does not match declared content length")
+
+        try:
+            grant, etag = await container.entry.consume_upload_part_reference(
+                reference_id, bounded_stream(), content_length
+            )
+        except FileResourceNotFound as error:
+            await container.entry.audit_upload_part_denied()
+            raise HTTPException(status_code=403, detail="Upload part access denied") from error
+        except UploadPartTransferFailed as error:
+            if isinstance(error.__cause__, ValueError):
+                raise HTTPException(status_code=400, detail="Upload part is invalid") from error
+            raise HTTPException(
+                status_code=503, detail="Upload part service unavailable"
+            ) from error
+        return Response(
+            status_code=204,
+            headers={
+                "ETag": etag,
+                "X-Part-Number": str(grant.part_number),
                 "Cache-Control": "no-store",
             },
         )

@@ -38,6 +38,20 @@ class ReadRangePayload(ResourceIdPayload):
     length: int = Field(ge=1, le=8 * 1024 * 1024)
 
 
+class CreateUploadPartReferencesPayload(ResourceIdPayload):
+    upload_session_id: str = Field(min_length=1, max_length=128)
+    parts: list[int] = Field(min_length=1, max_length=100)
+
+
+class CreateVersionUploadPayload(ResourceIdPayload):
+    mime_type: str = Field(min_length=1, max_length=128)
+    size_bytes: int = Field(ge=1, le=10 * 1024 * 1024 * 1024)
+
+
+class VersionIdPayload(ResourceIdPayload):
+    version_id: str = Field(min_length=1, max_length=128)
+
+
 class CreateStreamPayload(StrictPayload):
     protocol: Literal["WEBSOCKET", "WEBRTC", "RTMP", "HLS", "WS_AUDIO", "WS_VIDEO"]
     direction: Literal["INGRESS", "EGRESS", "BIDIRECTIONAL"]
@@ -67,6 +81,10 @@ PAYLOAD_MODELS: dict[str, type[StrictPayload]] = {
     "file.read_range": ReadRangePayload,
     "file.get_metadata": ResourceIdPayload,
     "file.delete_file": ResourceIdPayload,
+    "file.create_upload_part_urls": CreateUploadPartReferencesPayload,
+    "file.create_version_upload": CreateVersionUploadPayload,
+    "file.switch_current_version": VersionIdPayload,
+    "file.delete_version": VersionIdPayload,
     "media.create_stream_session": CreateStreamPayload,
     "media.get_stream_session": SessionIdPayload,
     "media.close_stream_session": SessionIdPayload,
@@ -80,6 +98,10 @@ IDEMPOTENT_OPERATIONS = frozenset(
         "file.complete_upload",
         "file.abort_upload",
         "file.delete_file",
+        "file.create_upload_part_urls",
+        "file.create_version_upload",
+        "file.switch_current_version",
+        "file.delete_version",
         "media.create_stream_session",
         "media.close_stream_session",
         "media.submit_processing_job",

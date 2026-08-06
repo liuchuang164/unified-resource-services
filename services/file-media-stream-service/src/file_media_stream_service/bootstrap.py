@@ -7,9 +7,13 @@ from file_media_stream_service.adapters.coordination.redis import (
     RedisQuotaChecker,
     RedisRangeAccessGrantStore,
     RedisReplayProtector,
+    RedisUploadPartGrantStore,
     create_redis_client,
 )
 from file_media_stream_service.adapters.event_bus import InMemoryEventBus
+from file_media_stream_service.adapters.file_commit_reconciliation import (
+    FileMetadataCommitReconciler,
+)
 from file_media_stream_service.adapters.file_verification import MetadataSafetyValidator
 from file_media_stream_service.adapters.media_provider import (
     FakeMediaProvider,
@@ -59,7 +63,10 @@ from file_media_stream_service.adapters.production_boundaries import (
 from file_media_stream_service.adapters.provisioning_compensation import (
     StreamProvisioningCompensator,
 )
-from file_media_stream_service.adapters.range_access import InMemoryRangeAccessGrantStore
+from file_media_stream_service.adapters.range_access import (
+    InMemoryRangeAccessGrantStore,
+    InMemoryUploadPartGrantStore,
+)
 from file_media_stream_service.adapters.readiness import ProductionReadiness
 from file_media_stream_service.application.ports.media_provider import MediaProviderPort
 from file_media_stream_service.application.use_cases import StreamLifecycleService, UseCases
@@ -79,6 +86,10 @@ OPERATIONS = (
     "file.read_range",
     "file.get_metadata",
     "file.delete_file",
+    "file.create_upload_part_urls",
+    "file.create_version_upload",
+    "file.switch_current_version",
+    "file.delete_version",
     "media.create_stream_session",
     "media.get_stream_session",
     "media.close_stream_session",
@@ -86,14 +97,13 @@ OPERATIONS = (
     "media.get_processing_job",
 )
 AUTHORIZATION_ACTIONS = (
-    "file.initialize_upload",
-    "file.get_resource",
-    "file.complete_upload",
-    "file.abort_upload",
-    "file.create_download_url",
-    "file.read_range",
-    "file.get_metadata",
-    "file.delete_file",
+    "file:create_upload",
+    "file:upload_part",
+    "file:complete_upload",
+    "file:read",
+    "file:create_version",
+    "file:delete_version",
+    "file:delete",
     "media_stream:create",
     "media_stream:publish",
     "media_stream:subscribe",
@@ -131,6 +141,7 @@ class ProductionContainer:
     lifecycle: StreamLifecycleService | None = None
     lifecycle_worker: StreamLifecycleWorker | None = None
     provisioning_compensator: StreamProvisioningCompensator | None = None
+    file_metadata_commit_tracker: FileMetadataCommitReconciler | None = None
 
 
 def build_container(settings: Settings | None = None) -> Container | ProductionContainer:
@@ -167,6 +178,7 @@ def build_container(settings: Settings | None = None) -> Container | ProductionC
         file_versions=InMemoryFileVersionRepository(state),
         file_uploads=InMemoryFileUploadSessionRepository(state),
         range_grants=InMemoryRangeAccessGrantStore(),
+        upload_part_grants=InMemoryUploadPartGrantStore(),
         malware_scanner=MetadataSafetyValidator(),
         sessions=InMemoryStreamSessionRepository(state),
         jobs=InMemoryProcessingJobRepository(state),
@@ -262,6 +274,7 @@ def build_production_container(settings: Settings) -> ProductionContainer:
     provisioning_compensator = StreamProvisioningCompensator(
         media_provider, coordination, reconciliation
     )
+    file_metadata_commit_tracker = FileMetadataCommitReconciler(reconciliation)
     idempotency = RedisCoordinatedIdempotencyStore(
         coordination,
         durable_idempotency,
@@ -272,6 +285,7 @@ def build_production_container(settings: Settings) -> ProductionContainer:
         file_versions=PostgresFileVersionRepository(sessions),
         file_uploads=PostgresFileUploadSessionRepository(sessions),
         range_grants=RedisRangeAccessGrantStore(redis_client),
+        upload_part_grants=RedisUploadPartGrantStore(redis_client),
         malware_scanner=MetadataSafetyValidator(),
         sessions=PostgresStreamSessionRepository(sessions),
         jobs=PostgresProcessingJobRepository(sessions),
@@ -288,6 +302,7 @@ def build_production_container(settings: Settings) -> ProductionContainer:
         stream_events=stream_events,
         transactions=transaction,
         provisioning_compensator=provisioning_compensator,
+        file_metadata_commit_tracker=file_metadata_commit_tracker,
     )
     entry = UnifiedEntry(
         use_cases=use_cases,
@@ -324,6 +339,7 @@ def build_production_container(settings: Settings) -> ProductionContainer:
         lifecycle=lifecycle,
         lifecycle_worker=lifecycle_worker,
         provisioning_compensator=provisioning_compensator,
+        file_metadata_commit_tracker=file_metadata_commit_tracker,
     )
 
 

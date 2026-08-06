@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     api_version: str = Field(default="v1", validation_alias="FMS_API_VERSION")
     stream_lease_seconds: int = Field(default=300, validation_alias="FMS_STREAM_LEASE_SECONDS")
     max_filename_length: int = Field(default=180, validation_alias="FMS_MAX_FILENAME_LENGTH")
+    max_upload_part_bytes: int = Field(
+        default=64 * 1024 * 1024,
+        ge=5 * 1024 * 1024,
+        le=512 * 1024 * 1024,
+        validation_alias="FMS_MAX_UPLOAD_PART_BYTES",
+    )
 
     database_url: SecretStr | None = Field(default=None, validation_alias="DATABASE_URL")
     database_pool_size: int = Field(default=5, ge=1, validation_alias="DATABASE_POOL_SIZE")

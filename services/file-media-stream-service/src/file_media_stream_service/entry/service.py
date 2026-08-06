@@ -1,3 +1,5 @@
+import secrets
+from collections.abc import AsyncIterator
 from time import monotonic
 from typing import Any, Literal
 
@@ -20,6 +22,7 @@ from file_media_stream_service.application.ports.protocols import (
     ReplayProtector,
 )
 from file_media_stream_service.application.use_cases.service import (
+    UploadPartTransferFailed,
     UseCases,
     canonical_request_hash,
 )
@@ -97,6 +100,86 @@ class UnifiedEntry:
             )
         )
         return grant, resource, stream
+
+    async def consume_upload_part_reference(
+        self,
+        reference_id: str,
+        content: AsyncIterator[bytes],
+        content_length: int,
+    ) -> tuple[Any, str]:
+        """Consume one pre-authorized binary upload grant and audit only metadata."""
+        started = monotonic()
+        try:
+            grant, etag = await self.use_cases.consume_upload_part_stream(
+                reference_id, content, content_length
+            )
+        except UploadPartTransferFailed as error:
+            await self._audit_upload_part(
+                error.grant,
+                content_length,
+                "FAILURE",
+                "UPLOAD_PART_TRANSFER_FAILED",
+                started,
+            )
+            raise
+        await self._audit_upload_part(grant, content_length, "SUCCESS", None, started)
+        return grant, etag
+
+    async def _audit_upload_part(
+        self,
+        grant: Any,
+        content_length: int,
+        result: str,
+        error_code: str | None,
+        started: float,
+    ) -> None:
+        await self.audit.write(
+            AuditEvent(
+                audit_id=f"audit_part_{grant.request_id}_{grant.part_number}",
+                request_id=grant.request_id,
+                trace_id=grant.trace_id,
+                tenant_id=grant.tenant_id,
+                biz_domain=grant.biz_domain,
+                caller_type=grant.caller_type,
+                caller_id=grant.caller_id,
+                operation="file.upload_part.stream",
+                resource_id=grant.resource_id,
+                session_id=None,
+                job_id=None,
+                decision="ALLOW",
+                result=result,
+                error_code=error_code,
+                duration_ms=int((monotonic() - started) * 1000),
+                created_at=self.clock.now(),
+                offset=grant.part_number,
+                length=content_length,
+            )
+        )
+
+    async def audit_upload_part_denied(self) -> None:
+        """Record a fail-closed reference denial without persisting the reference."""
+        await self.audit.write(
+            AuditEvent(
+                audit_id=f"audit_part_deny_{secrets.token_hex(12)}",
+                request_id="unknown",
+                trace_id="unknown",
+                tenant_id="unknown",
+                biz_domain="unknown",
+                caller_type="unknown",
+                caller_id="unknown",
+                operation="file.upload_part.stream",
+                resource_id=None,
+                session_id=None,
+                job_id=None,
+                decision="DENY",
+                result="FAILURE",
+                error_code="UPLOAD_PART_REFERENCE_DENIED",
+                duration_ms=0,
+                created_at=self.clock.now(),
+                offset=None,
+                length=None,
+            )
+        )
 
     async def execute(
         self, request: UnifiedRequest, source: Literal["business", "gateway"] = "business"
@@ -180,6 +263,22 @@ class UnifiedEntry:
 
     @staticmethod
     def _authorization_actions(operation: str, payload: dict[str, Any]) -> tuple[str, ...]:
+        file_actions = {
+            "file.initialize_upload": "file:create_upload",
+            "file.create_upload_part_urls": "file:upload_part",
+            "file.complete_upload": "file:complete_upload",
+            "file.abort_upload": "file:complete_upload",
+            "file.create_download_url": "file:read",
+            "file.read_range": "file:read",
+            "file.get_resource": "file:read",
+            "file.get_metadata": "file:read",
+            "file.create_version_upload": "file:create_version",
+            "file.switch_current_version": "file:create_version",
+            "file.delete_version": "file:delete_version",
+            "file.delete_file": "file:delete",
+        }
+        if operation in file_actions:
+            return (file_actions[operation],)
         if operation == "media.create_stream_session":
             direction = str(payload.get("direction", ""))
             data_actions = {
