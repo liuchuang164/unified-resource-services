@@ -1,5 +1,6 @@
 from typing import Protocol
 
+from external_access_service.domain.errors import DomainError
 from external_access_service.domain.models import (
     ExternalDispatchRequest,
     ExternalDispatchResponse,
@@ -39,6 +40,14 @@ class PolicyPort(Protocol):
 
 class RateLimiterPort(Protocol):
     async def check(self, request: ExternalDispatchRequest) -> None: ...
+
+
+class CircuitBreakerPort(Protocol):
+    async def before_call(self, provider: ProviderCode) -> None: ...
+
+    async def record_success(self, provider: ProviderCode) -> None: ...
+
+    async def record_failure(self, provider: ProviderCode, error: DomainError) -> None: ...
 
 
 class QuotaPort(Protocol):
