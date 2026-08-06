@@ -128,6 +128,10 @@ class ProviderCredential(BaseModel):
     api_key: str
     api_secret: str
     token: str | None = None
+    workspace_id: str | None = None
+    endpoint: str | None = None
+    auth_mode: str = "acs3"
+    model: str | None = None
 
 
 class ProviderResult(BaseModel):
