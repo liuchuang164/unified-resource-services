@@ -7,7 +7,9 @@ from external_access_service.application.ports.protocols import (
     AuditSinkPort,
     CredentialManagerPort,
     PolicyPort,
+    QuotaPort,
     RateLimiterPort,
+    UsageMeterPort,
 )
 from external_access_service.application.services.provider_router import ProviderRouter
 from external_access_service.domain.errors import (
@@ -39,6 +41,8 @@ class UnifiedExternalEntry:
         policy: PolicyPort,
         rate_limiter: RateLimiterPort,
         audit: AuditSinkPort,
+        quota: QuotaPort | None = None,
+        usage_meter: UsageMeterPort | None = None,
     ) -> None:
         self.operations = operations
         self.router = router
@@ -46,6 +50,8 @@ class UnifiedExternalEntry:
         self.policy = policy
         self.rate_limiter = rate_limiter
         self.audit = audit
+        self.quota = quota
+        self.usage_meter = usage_meter
 
     async def dispatch(self, request: ExternalDispatchRequest) -> ExternalDispatchResponse:
         started = monotonic()
@@ -61,6 +67,8 @@ class UnifiedExternalEntry:
             self._validate_payload_schema(request.payload)
             await self.policy.authorize(request)
             await self.rate_limiter.check(request)
+            if self.quota is not None:
+                await self.quota.check(request)
             provider = self.router.resolve(request.provider.provider_code)
             if not provider.supports(request.operation):
                 raise OperationNotAllowed("Provider does not support operation")
@@ -75,6 +83,10 @@ class UnifiedExternalEntry:
                     )
                     provider_request_id = result.provider_request_id
                     response = self._success(request, result, started, provider_request_id)
+                    if self.quota is not None:
+                        await self.quota.record(request)
+                    if self.usage_meter is not None:
+                        await self.usage_meter.record_usage(request, response)
                     await self._record_audit(response, request, retry_count)
                     return response
                 except DomainError as error:
@@ -132,7 +144,9 @@ class UnifiedExternalEntry:
                 "operation": request.operation,
                 "provider": request.provider.provider_code.value,
                 "result_status": response.status.value,
+                "status": response.status.value,
                 "error_code": response.error.code if response.error else None,
+                "latency_ms": response.latency_ms,
                 "retry_count": retry_count,
                 "provider_request_id": response.provider_request_id,
                 "estimated_usage": response.usage.model_dump(),

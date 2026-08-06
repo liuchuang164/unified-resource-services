@@ -5,8 +5,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from external_access_service.bootstrap import Container, build_container
-from external_access_service.domain.errors import DomainError, OperationNotFound
-from external_access_service.domain.models import ExternalDispatchRequest, ExternalDispatchResponse
+from external_access_service.domain.errors import DomainError, ErrorCode, OperationNotFound
+from external_access_service.domain.models import (
+    DispatchStatus,
+    ErrorDetail,
+    ExternalDispatchRequest,
+    ExternalDispatchResponse,
+)
 from external_access_service.infrastructure.config import Settings
 from external_access_service.infrastructure.observability.logging import configure_logging
 from external_access_service.interfaces.eag.gateway import ToolExecuteRequest, ToolResponse
@@ -33,6 +38,20 @@ def create_app(container: Container | None = None, settings: Settings | None = N
             },
         )
 
+    @app.exception_handler(DomainError)
+    async def domain_handler(request: Request, exc: DomainError) -> JSONResponse:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "code": exc.code.value if isinstance(exc.code, ErrorCode) else str(exc.code),
+                    "message": exc.message,
+                    "retryable": exc.retryable,
+                    "details": exc.details,
+                }
+            },
+        )
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -48,12 +67,18 @@ def create_app(container: Container | None = None, settings: Settings | None = N
 
     @app.get("/external/operations")
     async def list_operations(
-        tenant_id: str = Query(min_length=1), biz_domain: str = Query(min_length=1)
+        request: Request,
+        tenant_id: str = Query(min_length=1),
+        biz_domain: str = Query(min_length=1),
     ) -> dict[str, list[dict[str, Any]]]:
+        trusted = container.context_resolver.resolve_query(
+            request.headers,
+            {"tenant_id": tenant_id, "biz_domain": biz_domain},
+        )
         return {
             "operations": [
                 item.model_dump(mode="json")
-                for item in container.operations.list(tenant_id, biz_domain)
+                for item in container.operations.list(trusted.tenant_id, trusted.biz_domain)
             ]
         }
 
@@ -66,14 +91,80 @@ def create_app(container: Container | None = None, settings: Settings | None = N
         return {"operation": item.operation, "schema": item.payload_schema}
 
     @app.post("/external/dispatch", response_model=ExternalDispatchResponse)
-    async def dispatch(request: ExternalDispatchRequest) -> ExternalDispatchResponse:
-        return await container.entry.dispatch(request)
+    async def dispatch(
+        http_request: Request, request: ExternalDispatchRequest
+    ) -> ExternalDispatchResponse:
+        try:
+            trusted_request = container.context_resolver.resolve_dispatch(
+                http_request.headers, request
+            )
+        except DomainError as exc:
+            return _failure_response(request, exc)
+        return await container.entry.dispatch(trusted_request)
+
+    @app.get("/external/usage")
+    async def usage(
+        request: Request,
+        tenant_id: str = Query(min_length=1),
+        biz_domain: str = Query(min_length=1),
+        operation: str | None = None,
+        provider: str | None = None,
+    ) -> dict[str, Any]:
+        trusted = container.context_resolver.resolve_query(
+            request.headers,
+            {"tenant_id": tenant_id, "biz_domain": biz_domain},
+        )
+        return {
+            "tenant_id": trusted.tenant_id,
+            "biz_domain": trusted.biz_domain,
+            "usage": await container.usage_meter.query_usage(
+                tenant_id=trusted.tenant_id,
+                biz_domain=trusted.biz_domain,
+                operation=operation,
+                provider=provider,
+            ),
+        }
+
+    @app.get("/external/audit")
+    async def audit(
+        request: Request,
+        tenant_id: str = Query(min_length=1),
+        biz_domain: str = Query(min_length=1),
+        request_id: str | None = None,
+        operation: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        trusted = container.context_resolver.resolve_query(
+            request.headers,
+            {"tenant_id": tenant_id, "biz_domain": biz_domain},
+        )
+        if request_id:
+            records = await container.audit.query_by_request_id(
+                tenant_id=trusted.tenant_id,
+                biz_domain=trusted.biz_domain,
+                request_id=request_id,
+            )
+        else:
+            records = await container.audit.query_by_tenant(
+                tenant_id=trusted.tenant_id,
+                biz_domain=trusted.biz_domain,
+                operation=operation,
+                status=status,
+            )
+        return {"tenant_id": trusted.tenant_id, "biz_domain": trusted.biz_domain, "audit": records}
 
     @app.get("/eag/tools")
     async def list_tools(
-        tenant_id: str = Query(min_length=1), biz_domain: str = Query(min_length=1)
+        request: Request,
+        tenant_id: str = Query(min_length=1),
+        biz_domain: str = Query(min_length=1),
     ) -> dict[str, list[dict[str, Any]]]:
-        return {"tools": container.gateway.list_tools(tenant_id, biz_domain)}
+        trusted = container.context_resolver.resolve_query(
+            request.headers,
+            {"tenant_id": tenant_id, "biz_domain": biz_domain},
+            default_source="AGENT_TOOL",
+        )
+        return {"tools": container.gateway.list_tools(trusted.tenant_id, trusted.biz_domain)}
 
     @app.get("/eag/tools/{tool_name}/schema")
     async def tool_schema(tool_name: str) -> dict[str, Any]:
@@ -83,10 +174,33 @@ def create_app(container: Container | None = None, settings: Settings | None = N
             raise HTTPException(status_code=404, detail=exc.message) from exc
 
     @app.post("/eag/tools/execute", response_model=ToolResponse)
-    async def execute_tool(request: ToolExecuteRequest) -> ToolResponse:
-        return await container.gateway.execute(request)
+    async def execute_tool(http_request: Request, request: ToolExecuteRequest) -> ToolResponse:
+        trusted_request = container.context_resolver.resolve_tool(http_request.headers, request)
+        return await container.gateway.execute(trusted_request)
 
     return app
+
+
+def _failure_response(
+    request: ExternalDispatchRequest, error: DomainError
+) -> ExternalDispatchResponse:
+    return ExternalDispatchResponse(
+        request_id=request.request_id,
+        trace_id=request.trace_id,
+        tenant_id=request.auth_context.tenant_id,
+        biz_domain=request.biz_context.biz_domain,
+        operation=request.operation,
+        provider=request.provider.provider_code,
+        status=DispatchStatus.FAILED,
+        data=None,
+        latency_ms=0,
+        error=ErrorDetail(
+            code=error.code.value if isinstance(error.code, ErrorCode) else str(error.code),
+            message=error.message,
+            retryable=error.retryable,
+            details=error.details,
+        ),
+    )
 
 
 app = create_app()
