@@ -16,15 +16,24 @@ async def test_farui_request_mapping_and_signature(
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["path"] = request.url.path
-        seen["signature"] = request.headers["x-signature"]
+        seen["authorization"] = request.headers["authorization"]
+        seen["action"] = request.headers["x-acs-action"]
+        seen["version"] = request.headers["x-acs-version"]
         seen["body"] = request.content.decode()
-        return httpx.Response(200, headers={"x-request-id": "rid"}, json={"data": {"answer": "ok"}})
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "rid"},
+            json={"data": {"caseResult": [], "totalCount": 0}},
+        )
 
     container = container_with_transport(handler)
     response = await container.entry.dispatch(dispatch_request())
     assert response.status.value == "SUCCEEDED"
-    assert seen["path"] == "/legal/research-full"
-    assert len(seen["signature"]) == 64
+    assert seen["path"] == "/test-workspace/farui/search/case/fulltext"
+    assert seen["authorization"].startswith("ACS3-HMAC-SHA256 Credential=test-api-key")
+    assert "Signature=" in seen["authorization"]
+    assert seen["action"] == "RunSearchCaseFullText"
+    assert seen["version"] == "2024-06-28"
     assert json.loads(seen["body"])["query"]
 
 
