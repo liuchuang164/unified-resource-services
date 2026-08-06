@@ -16,6 +16,16 @@ from external_access_service.application.governance import (
     RetryPolicyService,
     UsageMeterService,
 )
+from external_access_service.application.provider_runtime import (
+    ExternalProvider,
+    ProviderAdapterFactory,
+    ProviderHealthManager,
+    ProviderLifecycleManager,
+    ProviderRegistry,
+    ProviderRoute,
+    ProviderRoutingEngine,
+    ProviderRuntimeStatus,
+)
 from external_access_service.application.security import CapabilityVerifier
 from external_access_service.application.services.credential_manager import (
     EnvironmentCredentialManager,
@@ -36,6 +46,7 @@ from external_access_service.infrastructure.providers.ali_farui import (
     AliFaruiAdapter,
     farui_mock_transport,
 )
+from external_access_service.infrastructure.providers.mock_legal import MockLegalProviderAdapter
 from external_access_service.interfaces.eag.gateway import ToolGateway
 
 
@@ -52,14 +63,20 @@ class Container:
     rate_limiter: RateLimitService
     circuit_breaker: CircuitBreakerService
     policy: PolicyService
+    provider_registry: ProviderRegistry
+    provider_lifecycle: ProviderLifecycleManager
+    provider_health: ProviderHealthManager
+    provider_factory: ProviderAdapterFactory
     context_resolver: ContextResolver
     capability: CapabilityVerifier
     provider: AliFaruiAdapter
+    mock_provider: MockLegalProviderAdapter
 
 
 def build_container(
     settings: Settings | None = None,
     farui_client: httpx.AsyncClient | None = None,
+    enable_mock_provider: bool = True,
 ) -> Container:
     settings = settings or Settings()
     operations = OperationRegistry()
@@ -131,9 +148,46 @@ def build_container(
         transport=farui_mock_transport() if settings.environment == "test" else None,
     )
     provider = AliFaruiAdapter(settings.farui_base_url, client=client)
+    mock_provider = MockLegalProviderAdapter()
+    provider_registry = ProviderRegistry(
+        (
+            ExternalProvider(
+                provider_code=ProviderCode.ALI_FARUI,
+                name="Alibaba Farui",
+                status=ProviderRuntimeStatus.ENABLED,
+                supported_operations=tuple(operation.operation for operation in OPERATIONS),
+                config={"priority": 10},
+            ),
+            ExternalProvider(
+                provider_code=ProviderCode.MOCK_LEGAL_PROVIDER,
+                name="Mock Legal Provider",
+                status=(
+                    ProviderRuntimeStatus.ENABLED
+                    if enable_mock_provider
+                    else ProviderRuntimeStatus.DISABLED
+                ),
+                supported_operations=tuple(operation.operation for operation in OPERATIONS),
+                config={"priority": 20},
+            ),
+        )
+    )
+    provider_lifecycle = ProviderLifecycleManager(provider_registry)
+    provider_map = {
+        ProviderCode.ALI_FARUI: provider,
+        ProviderCode.MOCK_LEGAL_PROVIDER: mock_provider,
+    }
+    provider_factory = ProviderAdapterFactory(provider_map)
+    provider_health = ProviderHealthManager(provider_map)
+    routing_engine = ProviderRoutingEngine(
+        provider_registry,
+        (
+            ProviderRoute(ProviderCode.ALI_FARUI, priority=10),
+            ProviderRoute(ProviderCode.MOCK_LEGAL_PROVIDER, priority=20),
+        ),
+    )
     entry = UnifiedExternalEntry(
         operations=operations,
-        router=ProviderRouter((provider,)),
+        router=ProviderRouter((provider, mock_provider), routing_engine),
         credential_manager=EnvironmentCredentialManager(
             EnvironmentCredentialProvider(settings)
         ),
@@ -157,7 +211,12 @@ def build_container(
         rate_limiter=rate_limiter,
         circuit_breaker=circuit_breaker,
         policy=policy,
+        provider_registry=provider_registry,
+        provider_lifecycle=provider_lifecycle,
+        provider_health=provider_health,
+        provider_factory=provider_factory,
         context_resolver=context_resolver,
         capability=capability,
         provider=provider,
+        mock_provider=mock_provider,
     )

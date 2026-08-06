@@ -27,6 +27,8 @@ from external_access_service.domain.models import (
     ErrorDetail,
     ExternalDispatchRequest,
     ExternalDispatchResponse,
+    ProviderCode,
+    ProviderRef,
 )
 from external_access_service.domain.operations import OperationRegistry
 from external_access_service.infrastructure.observability.redaction import redact
@@ -78,53 +80,67 @@ class UnifiedExternalEntry:
             await self.rate_limiter.check(request)
             if self.quota is not None:
                 await self.quota.check(request)
-            provider = self.router.resolve(request.provider.provider_code)
-            if not provider.supports(request.operation):
-                raise OperationNotAllowed("Provider does not support operation")
-            credential = await self.credential_manager.resolve(request)
-            if self.circuit_breaker is not None:
-                await self.circuit_breaker.before_call(request.provider.provider_code)
+            providers = self.router.resolve_candidates(request)
             attempts = request.policy.retry.max_attempts if request.policy.retry.enabled else 1
-            for attempt in range(1, attempts + 1):
-                retry_count = attempt - 1
-                try:
-                    result = await asyncio.wait_for(
-                        provider.execute(request, credential),
-                        timeout=request.policy.timeout_ms / 1000,
-                    )
-                    provider_request_id = result.provider_request_id
-                    response = self._success(request, result, started, provider_request_id)
-                    if self.circuit_breaker is not None:
-                        await self.circuit_breaker.record_success(request.provider.provider_code)
-                    if self.quota is not None:
-                        await self.quota.record(request)
-                    if self.usage_meter is not None:
-                        await self.usage_meter.record_usage(request, response)
-                    await self._record_audit(response, request, retry_count, retry_reason)
-                    return response
-                except DomainError as error:
-                    if self.circuit_breaker is not None:
-                        await self.circuit_breaker.record_failure(
-                            request.provider.provider_code, error
+            last_error: DomainError | None = None
+            for provider in providers:
+                provider_request = self._with_provider(request, provider.provider_code())
+                if not provider.supports(provider_request.operation):
+                    last_error = OperationNotAllowed("Provider does not support operation")
+                    continue
+                credential = await self.credential_manager.resolve(provider_request)
+                if self.circuit_breaker is not None:
+                    await self.circuit_breaker.before_call(provider.provider_code())
+                for attempt in range(1, attempts + 1):
+                    retry_count = attempt - 1
+                    try:
+                        result = await asyncio.wait_for(
+                            provider.execute(provider_request, credential),
+                            timeout=provider_request.policy.timeout_ms / 1000,
                         )
-                    decision = self.retry_policy.decide(error, attempt, attempts)
-                    retry_reason = decision.reason
-                    if not decision.should_retry:
-                        raise
-                    await asyncio.sleep(decision.delay_seconds)
-                except TimeoutError as exc:
-                    from external_access_service.domain.errors import ProviderTimeout
+                        provider_request_id = result.provider_request_id
+                        response = self._success(
+                            provider_request, result, started, provider_request_id
+                        )
+                        if self.circuit_breaker is not None:
+                            await self.circuit_breaker.record_success(provider.provider_code())
+                        if self.quota is not None:
+                            await self.quota.record(provider_request)
+                        if self.usage_meter is not None:
+                            await self.usage_meter.record_usage(provider_request, response)
+                        await self._record_audit(
+                            response, provider_request, retry_count, retry_reason
+                        )
+                        return response
+                    except DomainError as error:
+                        last_error = error
+                        if self.circuit_breaker is not None:
+                            await self.circuit_breaker.record_failure(
+                                provider.provider_code(), error
+                            )
+                        decision = self.retry_policy.decide(error, attempt, attempts)
+                        retry_reason = decision.reason
+                        if not decision.should_retry:
+                            break
+                        await asyncio.sleep(decision.delay_seconds)
+                    except TimeoutError:
+                        from external_access_service.domain.errors import ProviderTimeout
 
-                    timeout_error = ProviderTimeout("Provider request timed out")
-                    if self.circuit_breaker is not None:
-                        await self.circuit_breaker.record_failure(
-                            request.provider.provider_code, timeout_error
-                        )
-                    decision = self.retry_policy.decide(timeout_error, attempt, attempts)
-                    retry_reason = decision.reason
-                    if not decision.should_retry:
-                        raise timeout_error from exc
-                    await asyncio.sleep(decision.delay_seconds)
+                        timeout_error = ProviderTimeout("Provider request timed out")
+                        last_error = timeout_error
+                        if self.circuit_breaker is not None:
+                            await self.circuit_breaker.record_failure(
+                                provider.provider_code(), timeout_error
+                            )
+                        decision = self.retry_policy.decide(timeout_error, attempt, attempts)
+                        retry_reason = decision.reason
+                        if not decision.should_retry:
+                            break
+                        await asyncio.sleep(decision.delay_seconds)
+                if last_error is not None and not last_error.retryable:
+                    raise last_error
+            if last_error is not None:
+                raise last_error
             raise RuntimeError("Retry loop exited unexpectedly")
         except DomainError as error:
             response = self._failure(request, error, started, provider_request_id, retry_count)
@@ -223,6 +239,20 @@ class UnifiedExternalEntry:
             error=None,
         )
         return response
+
+    @staticmethod
+    def _with_provider(
+        request: ExternalDispatchRequest, provider_code: ProviderCode
+    ) -> ExternalDispatchRequest:
+
+        return request.model_copy(
+            update={
+                "provider": ProviderRef(
+                    provider_code=provider_code,
+                    capability=request.provider.capability,
+                )
+            }
+        )
 
     def _failure(
         self,

@@ -9,6 +9,16 @@ class EnvironmentCredentialProvider(CredentialProviderPort):
         self.settings = settings
 
     async def get_credential(self, request: ExternalDispatchRequest) -> ProviderCredential:
+        if request.provider.provider_code.value == "MOCK_LEGAL_PROVIDER":
+            return ProviderCredential(
+                credential_ref=(
+                    f"{request.auth_context.tenant_id}:{request.biz_context.biz_domain}:"
+                    "MOCK_LEGAL_PROVIDER:test"
+                ),
+                version="test",
+                api_key="mock-provider-key",
+                api_secret="mock-provider-secret",
+            )
         if request.provider.provider_code.value != "ALI_FARUI":
             raise ProviderNotConfigured("Provider credentials are not configured")
         api_key = self.settings.farui_api_key
