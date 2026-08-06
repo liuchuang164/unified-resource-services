@@ -22,7 +22,10 @@ class InMemoryObjectStorage:
         digest = hashlib.sha256(object_key.encode()).hexdigest()[:24]
         return f"upload_ref_{digest}"
 
-    async def create_multipart_upload(self, object_key: str) -> UploadHandle:
+    async def create_multipart_upload(
+        self, object_key: str, mime_type: str = "application/octet-stream"
+    ) -> UploadHandle:
+        self.content_types.setdefault(object_key, mime_type)
         provider_upload_id = "provider_" + hashlib.sha256(object_key.encode()).hexdigest()[:24]
         self.multipart[provider_upload_id] = {}
         self.multipart_keys[provider_upload_id] = object_key
@@ -31,6 +34,32 @@ class InMemoryObjectStorage:
     async def upload_part(self, provider_upload_id: str, part_number: int, content: bytes) -> str:
         self.multipart[provider_upload_id][part_number] = bytes(content)
         return hashlib.md5(content, usedforsecurity=False).hexdigest()
+
+    async def upload_part_content(
+        self, object_key: str, provider_upload_id: str, part_number: int, content: bytes
+    ) -> str:
+        if self.multipart_keys.get(provider_upload_id) != object_key:
+            raise RuntimeError("Upload session does not match object")
+        return await self.upload_part(provider_upload_id, part_number, content)
+
+    async def upload_part_stream(
+        self,
+        object_key: str,
+        provider_upload_id: str,
+        part_number: int,
+        content: AsyncIterator[bytes],
+        content_length: int,
+    ) -> str:
+        buffered = bytearray()
+        async for chunk in content:
+            buffered.extend(chunk)
+            if len(buffered) > content_length:
+                raise ValueError("Upload part exceeds declared content length")
+        if len(buffered) != content_length:
+            raise ValueError("Upload part does not match declared content length")
+        return await self.upload_part_content(
+            object_key, provider_upload_id, part_number, bytes(buffered)
+        )
 
     async def complete_multipart_upload(
         self, object_key: str, provider_upload_id: str, parts: tuple[tuple[int, str], ...]

@@ -5,10 +5,12 @@ from .models import (
     FileUploadSession,
     MediaResource,
     ProcessingJob,
+    ProcessorInputReference,
     RangeAccessGrant,
     ResourceGrant,
     StreamEvent,
     StreamSession,
+    UploadPartGrant,
 )
 
 __all__ = [
@@ -18,8 +20,10 @@ __all__ = [
     "FileUploadSession",
     "MediaResource",
     "ProcessingJob",
+    "ProcessorInputReference",
     "RangeAccessGrant",
     "ResourceGrant",
     "StreamEvent",
     "StreamSession",
+    "UploadPartGrant",
 ]

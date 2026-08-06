@@ -26,6 +26,7 @@ from file_media_stream_service.domain.enums import (
     ProcessingJobStatus,
     StreamConnectionState,
     StreamSessionStatus,
+    UploadSessionStatus,
 )
 from file_media_stream_service.domain.exceptions import IdempotencyConflict
 
@@ -65,6 +66,7 @@ class PostgresFileRepository:
                 created_by=value.created_by,
                 created_at=value.created_at,
                 updated_at=value.updated_at,
+                current_version_id=value.current_version_id,
             )
         )
         await self.sessions().flush()
@@ -98,6 +100,7 @@ class PostgresFileRepository:
             row.created_by,
             row.created_at,
             row.updated_at,
+            row.current_version_id,
         )
 
     async def delete(self, tenant_id: str, biz_domain: str, resource_id: str) -> None:
@@ -125,6 +128,9 @@ class PostgresFileRepository:
         row.status = value.status.value
         row.version = value.version
         row.updated_at = value.updated_at
+        row.object_key = value.object_key
+        row.mime_type = value.mime_type
+        row.current_version_id = value.current_version_id
         await self.sessions().flush()
 
 
@@ -143,6 +149,7 @@ class PostgresFileVersionRepository:
                 object_key=value.object_key,
                 size_bytes=value.size_bytes,
                 checksum=value.checksum,
+                mime_type=value.mime_type,
                 status=value.status.value,
                 created_at=value.created_at,
             )
@@ -175,9 +182,54 @@ class PostgresFileVersionRepository:
                 row.checksum,
                 FileResourceStatus(row.status),
                 row.created_at,
+                row.mime_type,
             )
             for row in rows
         ]
+
+    async def get_by_scope_and_id(
+        self, tenant_id: str, biz_domain: str, version_id: str
+    ) -> FileResourceVersion | None:
+        row = await self.sessions().scalar(
+            select(FileResourceVersionRow).where(
+                FileResourceVersionRow.tenant_id == tenant_id,
+                FileResourceVersionRow.biz_domain == biz_domain,
+                FileResourceVersionRow.version_id == version_id,
+            )
+        )
+        return None if row is None else self._entity(row)
+
+    async def save(self, value: FileResourceVersion) -> None:
+        row = await self.sessions().scalar(
+            select(FileResourceVersionRow).where(
+                FileResourceVersionRow.tenant_id == value.tenant_id,
+                FileResourceVersionRow.biz_domain == value.biz_domain,
+                FileResourceVersionRow.version_id == value.version_id,
+            )
+        )
+        if row is None:
+            await self.add(value)
+            return
+        row.checksum = value.checksum
+        row.mime_type = value.mime_type
+        row.status = value.status.value
+        await self.sessions().flush()
+
+    @staticmethod
+    def _entity(row: FileResourceVersionRow) -> FileResourceVersion:
+        return FileResourceVersion(
+            row.version_id,
+            row.resource_id,
+            row.tenant_id,
+            row.biz_domain,
+            row.version,
+            row.object_key,
+            row.size_bytes,
+            row.checksum,
+            FileResourceStatus(row.status),
+            row.created_at,
+            row.mime_type,
+        )
 
 
 class PostgresFileUploadSessionRepository:
@@ -196,6 +248,12 @@ class PostgresFileUploadSessionRepository:
                 expires_at=value.expires_at,
                 completed=value.completed,
                 aborted=value.aborted,
+                status=value.status.value,
+                total_parts=value.total_parts,
+                uploaded_parts=list(value.uploaded_parts),
+                version_id=value.version_id,
+                created_at=value.created_at,
+                updated_at=value.updated_at,
             )
         )
         await self.sessions().flush()
@@ -213,17 +271,24 @@ class PostgresFileUploadSessionRepository:
             return
         row.completed = value.completed
         row.aborted = value.aborted
+        row.status = value.status.value
+        row.total_parts = value.total_parts
+        row.uploaded_parts = list(value.uploaded_parts)
+        row.version_id = value.version_id
+        row.updated_at = value.updated_at
         await self.sessions().flush()
 
     async def get_by_scope_and_id(
         self, tenant_id: str, biz_domain: str, upload_id: str
     ) -> FileUploadSession | None:
         row = await self.sessions().scalar(
-            select(FileUploadSessionRow).where(
+            select(FileUploadSessionRow)
+            .where(
                 FileUploadSessionRow.tenant_id == tenant_id,
                 FileUploadSessionRow.biz_domain == biz_domain,
                 FileUploadSessionRow.upload_id == upload_id,
             )
+            .with_for_update()
         )
         return (
             None
@@ -238,7 +303,49 @@ class PostgresFileUploadSessionRepository:
                 row.expires_at,
                 row.completed,
                 row.aborted,
+                UploadSessionStatus(row.status),
+                row.total_parts,
+                tuple(row.uploaded_parts),
+                row.version_id,
+                row.created_at,
+                row.updated_at,
             )
+        )
+
+    async def list_by_scope_and_resource(
+        self, tenant_id: str, biz_domain: str, resource_id: str
+    ) -> list[FileUploadSession]:
+        rows = (
+            await self.sessions().scalars(
+                select(FileUploadSessionRow)
+                .where(
+                    FileUploadSessionRow.tenant_id == tenant_id,
+                    FileUploadSessionRow.biz_domain == biz_domain,
+                    FileUploadSessionRow.resource_id == resource_id,
+                )
+                .with_for_update()
+            )
+        ).all()
+        return [self._entity(row) for row in rows]
+
+    @staticmethod
+    def _entity(row: FileUploadSessionRow) -> FileUploadSession:
+        return FileUploadSession(
+            row.upload_id,
+            row.resource_id,
+            row.tenant_id,
+            row.biz_domain,
+            row.provider_upload_id,
+            row.upload_reference,
+            row.expires_at,
+            row.completed,
+            row.aborted,
+            UploadSessionStatus(row.status),
+            row.total_parts,
+            tuple(row.uploaded_parts),
+            row.version_id,
+            row.created_at,
+            row.updated_at,
         )
 
 

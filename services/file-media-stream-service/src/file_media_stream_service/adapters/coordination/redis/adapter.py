@@ -14,7 +14,7 @@ from redis.exceptions import RedisError
 from file_media_stream_service.application.dto import RequestContext
 from file_media_stream_service.application.ports.media_provider import StreamLease
 from file_media_stream_service.application.ports.protocols import IdempotencyStore
-from file_media_stream_service.domain.entities import RangeAccessGrant
+from file_media_stream_service.domain.entities import RangeAccessGrant, UploadPartGrant
 from file_media_stream_service.domain.exceptions import (
     QuotaExceeded,
     ReplayDetected,
@@ -288,5 +288,54 @@ class RedisRangeAccessGrantStore:
             trace_id=str(data["trace_id"]),
             offset=int(data["offset"]),
             length=int(data["length"]),
+            expires_at=datetime.fromisoformat(str(data["expires_at"])),
+        )
+
+
+class RedisUploadPartGrantStore:
+    _CONSUME = RedisRangeAccessGrantStore._CONSUME
+
+    def __init__(self, client: Redis) -> None:
+        self.client = client
+
+    async def issue(self, grant: UploadPartGrant) -> None:
+        ttl = max(1, int((grant.expires_at - datetime.now(UTC)).total_seconds()))
+        payload = json.dumps(
+            {
+                "reference_id": grant.reference_id,
+                "resource_id": grant.resource_id,
+                "upload_session_id": grant.upload_session_id,
+                "tenant_id": grant.tenant_id,
+                "biz_domain": grant.biz_domain,
+                "caller_id": grant.caller_id,
+                "caller_type": grant.caller_type,
+                "request_id": grant.request_id,
+                "trace_id": grant.trace_id,
+                "part_number": grant.part_number,
+                "expires_at": grant.expires_at.isoformat(),
+            },
+            separators=(",", ":"),
+        )
+        key = f"fms:upload-part:{_digest(grant.reference_id)}"
+        if not await self.client.set(key, payload, nx=True, ex=ttl):
+            raise RuntimeError("Upload part reference already exists")
+
+    async def consume(self, reference_id: str) -> UploadPartGrant | None:
+        key = f"fms:upload-part:{_digest(reference_id)}"
+        raw = await cast(Any, self.client.eval(self._CONSUME, 1, key))
+        if raw is None:
+            return None
+        data = json.loads(raw)
+        return UploadPartGrant(
+            reference_id=str(data["reference_id"]),
+            resource_id=str(data["resource_id"]),
+            upload_session_id=str(data["upload_session_id"]),
+            tenant_id=str(data["tenant_id"]),
+            biz_domain=str(data["biz_domain"]),
+            caller_id=str(data["caller_id"]),
+            caller_type=str(data["caller_type"]),
+            request_id=str(data["request_id"]),
+            trace_id=str(data["trace_id"]),
+            part_number=int(data["part_number"]),
             expires_at=datetime.fromisoformat(str(data["expires_at"])),
         )

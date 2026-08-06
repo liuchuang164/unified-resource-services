@@ -6,6 +6,7 @@ from .status import (
     StreamEventType,
     StreamProtocol,
     StreamSessionStatus,
+    UploadSessionStatus,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "StreamEventType",
     "StreamProtocol",
     "StreamSessionStatus",
+    "UploadSessionStatus",
 ]

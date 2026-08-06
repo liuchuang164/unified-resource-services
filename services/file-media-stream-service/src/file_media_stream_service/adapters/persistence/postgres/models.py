@@ -36,6 +36,7 @@ class FileResourceRow(ScopeMixin, Base):
     created_by: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    current_version_id: Mapped[str | None] = mapped_column(String(128))
 
 
 class FileResourceVersionRow(ScopeMixin, Base):
@@ -50,7 +51,8 @@ class FileResourceVersionRow(ScopeMixin, Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    checksum: Mapped[str | None] = mapped_column(String(64))
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -68,6 +70,12 @@ class FileUploadSessionRow(ScopeMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed: Mapped[bool] = mapped_column(nullable=False, default=False)
     aborted: Mapped[bool] = mapped_column(nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    total_parts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    uploaded_parts: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    version_id: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class MediaResourceRow(ScopeMixin, Base):

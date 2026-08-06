@@ -5,6 +5,7 @@ from .adapter import (
     RedisQuotaChecker,
     RedisRangeAccessGrantStore,
     RedisReplayProtector,
+    RedisUploadPartGrantStore,
 )
 from .client import create_redis_client
 
@@ -15,5 +16,6 @@ __all__ = [
     "RedisQuotaChecker",
     "RedisRangeAccessGrantStore",
     "RedisReplayProtector",
+    "RedisUploadPartGrantStore",
     "create_redis_client",
 ]

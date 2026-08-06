@@ -61,6 +61,21 @@ class InMemoryFileVersionRepository:
             if tenant == tenant_id and domain == biz_domain and current_resource == resource_id
         ]
 
+    async def get_by_scope_and_id(
+        self, tenant_id: str, biz_domain: str, version_id: str
+    ) -> FileResourceVersion | None:
+        return next(
+            (
+                deepcopy(version)
+                for (tenant, domain, _, _), version in self.state.file_versions.items()
+                if tenant == tenant_id and domain == biz_domain and version.version_id == version_id
+            ),
+            None,
+        )
+
+    async def save(self, version: FileResourceVersion) -> None:
+        await self.add(version)
+
 
 class InMemoryFileUploadSessionRepository:
     def __init__(self, state: InMemoryState) -> None:
@@ -78,6 +93,15 @@ class InMemoryFileUploadSessionRepository:
         self, tenant_id: str, biz_domain: str, upload_id: str
     ) -> FileUploadSession | None:
         return deepcopy(self.state.file_uploads.get((tenant_id, biz_domain, upload_id)))
+
+    async def list_by_scope_and_resource(
+        self, tenant_id: str, biz_domain: str, resource_id: str
+    ) -> list[FileUploadSession]:
+        return [
+            deepcopy(upload)
+            for (tenant, domain, _), upload in self.state.file_uploads.items()
+            if tenant == tenant_id and domain == biz_domain and upload.resource_id == resource_id
+        ]
 
 
 class InMemoryStreamSessionRepository:

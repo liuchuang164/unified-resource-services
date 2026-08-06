@@ -13,6 +13,14 @@ class FileResourceStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class UploadSessionStatus(StrEnum):
+    INIT = "INIT"
+    UPLOADING = "UPLOADING"
+    COMPLETED = "COMPLETED"
+    ABORTED = "ABORTED"
+    EXPIRED = "EXPIRED"
+
+
 class StreamSessionStatus(StrEnum):
     CREATING = "CREATING"
     READY = "READY"

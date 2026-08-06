@@ -13,6 +13,7 @@ from file_media_stream_service.domain.entities.models import (
     RangeAccessGrant,
     StreamEvent,
     StreamSession,
+    UploadPartGrant,
 )
 
 
@@ -30,6 +31,10 @@ class FileVersionRepository(Protocol):
     async def list_by_scope_and_resource(
         self, tenant_id: str, biz_domain: str, resource_id: str
     ) -> list[FileResourceVersion]: ...
+    async def get_by_scope_and_id(
+        self, tenant_id: str, biz_domain: str, version_id: str
+    ) -> FileResourceVersion | None: ...
+    async def save(self, version: FileResourceVersion) -> None: ...
 
 
 class FileUploadSessionRepository(Protocol):
@@ -38,6 +43,9 @@ class FileUploadSessionRepository(Protocol):
     async def get_by_scope_and_id(
         self, tenant_id: str, biz_domain: str, upload_id: str
     ) -> FileUploadSession | None: ...
+    async def list_by_scope_and_resource(
+        self, tenant_id: str, biz_domain: str, resource_id: str
+    ) -> list[FileUploadSession]: ...
 
 
 class StreamSessionRepository(Protocol):
@@ -123,7 +131,9 @@ class StoredObjectMetadata:
 
 class ObjectStorage(Protocol):
     async def initialize_upload(self, object_key: str, mime_type: str, size_bytes: int) -> str: ...
-    async def create_multipart_upload(self, object_key: str) -> UploadHandle: ...
+    async def create_multipart_upload(
+        self, object_key: str, mime_type: str = "application/octet-stream"
+    ) -> UploadHandle: ...
     async def complete_multipart_upload(
         self, object_key: str, provider_upload_id: str, parts: tuple[tuple[int, str], ...]
     ) -> StoredObjectMetadata: ...
@@ -133,11 +143,27 @@ class ObjectStorage(Protocol):
     async def create_download_url(self, object_key: str) -> tuple[str, datetime]: ...
     def stream_range(self, object_key: str, offset: int, length: int) -> AsyncIterator[bytes]: ...
     async def delete(self, object_key: str) -> None: ...
+    async def upload_part_content(
+        self, object_key: str, provider_upload_id: str, part_number: int, content: bytes
+    ) -> str: ...
+    async def upload_part_stream(
+        self,
+        object_key: str,
+        provider_upload_id: str,
+        part_number: int,
+        content: AsyncIterator[bytes],
+        content_length: int,
+    ) -> str: ...
 
 
 class RangeAccessGrantStore(Protocol):
     async def issue(self, grant: RangeAccessGrant) -> None: ...
     async def consume(self, reference_id: str) -> RangeAccessGrant | None: ...
+
+
+class UploadPartGrantStore(Protocol):
+    async def issue(self, grant: UploadPartGrant) -> None: ...
+    async def consume(self, reference_id: str) -> UploadPartGrant | None: ...
 
 
 class MalwareScannerPort(Protocol):
@@ -179,4 +205,24 @@ class ProvisioningCompensator(Protocol):
     def begin(self) -> None: ...
     async def register(self, session: StreamSession, fencing_token: int) -> None: ...
     async def compensate(self) -> None: ...
+    def clear(self) -> None: ...
+
+
+class FileMetadataCommitTracker(Protocol):
+    def begin(self) -> None: ...
+    def register(
+        self,
+        tenant_id: str,
+        biz_domain: str,
+        resource_id: str,
+        version_id: str,
+    ) -> None: ...
+    def register_delete(
+        self,
+        tenant_id: str,
+        biz_domain: str,
+        resource_id: str,
+        version_id: str | None,
+    ) -> None: ...
+    async def reconcile(self) -> None: ...
     def clear(self) -> None: ...

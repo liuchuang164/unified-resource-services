@@ -8,6 +8,7 @@ from file_media_stream_service.domain.enums.status import (
     StreamConnectionState,
     StreamEventType,
     StreamSessionStatus,
+    UploadSessionStatus,
 )
 from file_media_stream_service.domain.exceptions.errors import InvalidStateTransition
 
@@ -18,13 +19,25 @@ def utc_now() -> datetime:
 
 FILE_TRANSITIONS: dict[FileResourceStatus, frozenset[FileResourceStatus]] = {
     FileResourceStatus.PENDING_UPLOAD: frozenset(
-        {FileResourceStatus.UPLOADING, FileResourceStatus.FAILED}
+        {
+            FileResourceStatus.UPLOADING,
+            FileResourceStatus.DELETING,
+            FileResourceStatus.FAILED,
+        }
     ),
     FileResourceStatus.UPLOADING: frozenset(
-        {FileResourceStatus.VERIFYING, FileResourceStatus.FAILED}
+        {
+            FileResourceStatus.VERIFYING,
+            FileResourceStatus.DELETING,
+            FileResourceStatus.FAILED,
+        }
     ),
     FileResourceStatus.VERIFYING: frozenset(
-        {FileResourceStatus.AVAILABLE, FileResourceStatus.FAILED}
+        {
+            FileResourceStatus.AVAILABLE,
+            FileResourceStatus.DELETING,
+            FileResourceStatus.FAILED,
+        }
     ),
     FileResourceStatus.AVAILABLE: frozenset(
         {
@@ -123,13 +136,14 @@ class FileResource:
     created_by: str
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    current_version_id: str | None = None
 
     def transition_to(self, target: FileResourceStatus) -> None:
         self.status = _transition(self.status, target, FILE_TRANSITIONS)
         self.updated_at = utc_now()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class FileResourceVersion:
     version_id: str
     resource_id: str
@@ -138,9 +152,13 @@ class FileResourceVersion:
     version: int
     object_key: str
     size_bytes: int
-    checksum: str
+    checksum: str | None
     status: FileResourceStatus
     created_at: datetime = field(default_factory=utc_now)
+    mime_type: str = "application/octet-stream"
+
+    def transition_to(self, target: FileResourceStatus) -> None:
+        self.status = _transition(self.status, target, FILE_TRANSITIONS)
 
 
 @dataclass(slots=True)
@@ -154,6 +172,74 @@ class FileUploadSession:
     expires_at: datetime
     completed: bool = False
     aborted: bool = False
+    status: UploadSessionStatus = UploadSessionStatus.INIT
+    total_parts: int = 0
+    uploaded_parts: tuple[int, ...] = ()
+    version_id: str | None = None
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
+    def ensure_active(self, now: datetime) -> None:
+        if self.expires_at <= now and self.status not in {
+            UploadSessionStatus.COMPLETED,
+            UploadSessionStatus.ABORTED,
+        }:
+            self.status = UploadSessionStatus.EXPIRED
+            self.updated_at = now
+        if self.status is UploadSessionStatus.EXPIRED:
+            raise InvalidStateTransition("Upload session has expired")
+        if self.status in {UploadSessionStatus.COMPLETED, UploadSessionStatus.ABORTED}:
+            raise InvalidStateTransition(f"Upload session is {self.status}")
+
+    def authorize_parts(self, parts: tuple[int, ...], now: datetime) -> None:
+        self.ensure_active(now)
+        if not parts or any(part < 1 or part > 10_000 for part in parts):
+            raise ValueError("Multipart part numbers are invalid")
+        self.total_parts = max(self.total_parts, max(parts))
+        self.status = UploadSessionStatus.UPLOADING
+        self.updated_at = now
+
+    def part_uploaded(self, part_number: int, now: datetime) -> None:
+        self.ensure_active(now)
+        self.uploaded_parts = tuple(sorted({*self.uploaded_parts, part_number}))
+        self.status = UploadSessionStatus.UPLOADING
+        self.updated_at = now
+
+    def mark_completed(self, now: datetime) -> None:
+        self.completed = True
+        self.status = UploadSessionStatus.COMPLETED
+        self.updated_at = now
+
+    def mark_aborted(self, now: datetime) -> None:
+        self.aborted = True
+        self.status = UploadSessionStatus.ABORTED
+        self.updated_at = now
+
+
+@dataclass(frozen=True, slots=True)
+class UploadPartGrant:
+    reference_id: str
+    resource_id: str
+    upload_session_id: str
+    tenant_id: str
+    biz_domain: str
+    caller_id: str
+    caller_type: str
+    request_id: str
+    trace_id: str
+    part_number: int
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessorInputReference:
+    resource_id: str
+    version_id: str
+    tenant_id: str
+    biz_domain: str
+    mime_type: str
+    checksum: str
+    storage_reference: str
 
 
 @dataclass(frozen=True, slots=True)

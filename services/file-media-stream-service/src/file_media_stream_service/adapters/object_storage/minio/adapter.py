@@ -1,9 +1,12 @@
 import asyncio
 import hashlib
+import logging
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
+import httpx
 from minio import Minio
 from minio.error import S3Error
 
@@ -37,6 +40,10 @@ class MinioObjectStorage:
         upload_ttl_seconds: int = 900,
         download_ttl_seconds: int = 300,
     ) -> None:
+        # Presigned URLs are authorization credentials and must never be emitted by
+        # HTTP client request logs.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
         self._client = client
         self._bucket = bucket
         self._upload_ttl = timedelta(seconds=upload_ttl_seconds)
@@ -61,18 +68,22 @@ class MinioObjectStorage:
             self._upload_ttl,
         )
 
-    async def begin_multipart(self, object_key: str) -> MultipartUpload:
+    async def begin_multipart(
+        self, object_key: str, mime_type: str = "application/octet-stream"
+    ) -> MultipartUpload:
         self._validate_key(object_key)
         upload_id = await asyncio.to_thread(
             self._client._create_multipart_upload,
             self._bucket,
             object_key,
-            {},
+            {"Content-Type": mime_type},
         )
         return MultipartUpload(upload_id=upload_id, object_key=object_key)
 
-    async def create_multipart_upload(self, object_key: str) -> UploadHandle:
-        upload = await self.begin_multipart(object_key)
+    async def create_multipart_upload(
+        self, object_key: str, mime_type: str = "application/octet-stream"
+    ) -> UploadHandle:
+        upload = await self.begin_multipart(object_key, mime_type)
         return UploadHandle(upload.upload_id)
 
     async def upload_part(
@@ -94,6 +105,48 @@ class MinioObjectStorage:
             part_number,
         )
         return str(etag)
+
+    async def upload_part_content(
+        self, object_key: str, provider_upload_id: str, part_number: int, content: bytes
+    ) -> str:
+        return await self.upload_part(
+            MultipartUpload(provider_upload_id, object_key), part_number, content
+        )
+
+    async def upload_part_stream(
+        self,
+        object_key: str,
+        provider_upload_id: str,
+        part_number: int,
+        content: AsyncIterator[bytes],
+        content_length: int,
+    ) -> str:
+        self._validate_key(object_key)
+        if part_number < 1 or part_number > 10_000:
+            raise ValueError("part_number must be between 1 and 10000")
+        if content_length <= 0:
+            raise ValueError("content_length must be positive")
+        url = await asyncio.to_thread(
+            self._client.get_presigned_url,
+            "PUT",
+            self._bucket,
+            object_key,
+            self._upload_ttl,
+            None,
+            None,
+            None,
+            {"partNumber": str(part_number), "uploadId": provider_upload_id},
+        )
+        headers = {"Content-Length": str(content_length)}
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(300, connect=5), trust_env=False
+        ) as client:
+            response = await client.put(url, headers=headers, content=content)
+        response.raise_for_status()
+        etag = response.headers.get("etag", "").strip('"')
+        if not etag:
+            raise RuntimeError("Object storage did not return a part ETag")
+        return cast(str, etag)
 
     async def complete_multipart(
         self,
