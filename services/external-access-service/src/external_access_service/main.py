@@ -11,6 +11,7 @@ from external_access_service.domain.models import (
     ErrorDetail,
     ExternalDispatchRequest,
     ExternalDispatchResponse,
+    ProviderCode,
 )
 from external_access_service.infrastructure.config import Settings
 from external_access_service.infrastructure.observability.logging import configure_logging
@@ -58,11 +59,11 @@ def create_app(container: Container | None = None, settings: Settings | None = N
 
     @app.get("/ready")
     async def ready() -> dict[str, Any]:
-        provider_health = await container.provider.health_check()
+        provider_health = await container.provider_health.check_all()
         return {
             "status": "ready",
             "config": "ok",
-            "providers": {provider_health["provider"]: provider_health["status"]},
+            "providers": _ready_provider_status(provider_health),
         }
 
     @app.get("/external/operations")
@@ -153,6 +154,32 @@ def create_app(container: Container | None = None, settings: Settings | None = N
             )
         return {"tenant_id": trusted.tenant_id, "biz_domain": trusted.biz_domain, "audit": records}
 
+    @app.get("/external/providers")
+    async def providers() -> dict[str, list[dict[str, Any]]]:
+        return {
+            "providers": [
+                provider.model_dump(mode="json")
+                for provider in container.provider_registry.list_providers()
+            ]
+        }
+
+    @app.get("/external/providers/health")
+    async def providers_health() -> dict[str, dict[str, object]]:
+        return await container.provider_health.check_all()
+
+    @app.get("/external/providers/{provider}/health")
+    async def provider_health(provider: str) -> dict[str, object]:
+        return await container.provider_health.check(ProviderCode(provider))
+
+    @app.get("/external/providers/{provider}/operations")
+    async def provider_operations(provider: str) -> dict[str, Any]:
+        typed = container.provider_registry.get(ProviderCode(provider))
+        return {
+            "provider": typed.provider_code.value,
+            "operations": list(typed.supported_operations),
+            "status": typed.status.value,
+        }
+
     @app.get("/eag/tools")
     async def list_tools(
         request: Request,
@@ -201,6 +228,19 @@ def _failure_response(
             details=error.details,
         ),
     )
+
+
+def _ready_provider_status(
+    provider_health: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    statuses: dict[str, object] = {}
+    for provider, health in provider_health.items():
+        details = health.get("details")
+        if isinstance(details, dict):
+            statuses[provider] = details.get("status", health["status"])
+        else:
+            statuses[provider] = health["status"]
+    return statuses
 
 
 app = create_app()
