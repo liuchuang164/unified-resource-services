@@ -7,6 +7,15 @@ from fastapi.testclient import TestClient
 def test_business_and_agent_paths_share_unified_response(
     client: TestClient, dispatch_payload: Callable[..., dict[str, Any]]
 ) -> None:
+    token = client.app.state.container.capability.issue_for_test(
+        {
+            "issuer": "hermes",
+            "tenant_id": "tenant_A",
+            "biz_domain": "LEGAL",
+            "allowed_operations": ["legal_research_full"],
+            "expires_at": "2026-12-01T00:00:00+00:00",
+        }
+    )
     business = client.post("/external/dispatch", json=dispatch_payload()).json()
     agent = client.post(
         "/eag/tools/execute",
@@ -19,7 +28,7 @@ def test_business_and_agent_paths_share_unified_response(
             "biz_domain": "LEGAL",
             "tool_name": "ali_farui",
             "action": "legal_research_full",
-            "capability_token": "cap_test",
+            "capability_token": token,
             "input": {"query": "法律研究"},
         },
     ).json()["response"]

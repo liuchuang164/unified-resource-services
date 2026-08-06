@@ -2,6 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from external_access_service.application.security import CapabilityVerifier
 from external_access_service.application.services.unified_entry import UnifiedExternalEntry
 from external_access_service.domain.errors import InvalidRequest, OperationNotFound
 from external_access_service.domain.models import (
@@ -57,9 +58,15 @@ class ToolResponse(BaseModel):
 
 
 class ToolGateway:
-    def __init__(self, entry: UnifiedExternalEntry, operations: OperationRegistry) -> None:
+    def __init__(
+        self,
+        entry: UnifiedExternalEntry,
+        operations: OperationRegistry,
+        capability: CapabilityVerifier,
+    ) -> None:
         self.entry = entry
         self.operations = operations
+        self.capability = capability
 
     def list_tools(self, tenant_id: str, biz_domain: str) -> list[dict[str, Any]]:
         if not tenant_id or biz_domain != "LEGAL":
@@ -89,6 +96,12 @@ class ToolGateway:
         operation = ACTION_OPERATION.get(request.action)
         if operation is None:
             raise InvalidRequest("Tool action is not registered")
+        self.capability.verify(
+            request.capability_token,
+            tenant_id=request.tenant_id,
+            biz_domain=request.biz_domain,
+            operation=request.action,
+        )
         dispatch_request = ExternalDispatchRequest(
             request_id=request.request_id,
             trace_id=request.trace_id,

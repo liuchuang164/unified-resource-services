@@ -21,6 +21,9 @@ class ErrorCode(StrEnum):
     QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
     RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
     CIRCUIT_OPEN = "CIRCUIT_OPEN"
+    CAPABILITY_INVALID = "CAPABILITY_INVALID"
+    CAPABILITY_EXPIRED = "CAPABILITY_EXPIRED"
+    CAPABILITY_SCOPE_DENIED = "CAPABILITY_SCOPE_DENIED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -102,6 +105,22 @@ class RateLimitExceeded(DomainError):
     retryable = True
 
 
+class QuotaExceeded(DomainError):
+    code = ErrorCode.QUOTA_EXCEEDED
+
+
 class CircuitOpen(DomainError):
     code = ErrorCode.CIRCUIT_OPEN
     retryable = True
+
+
+class CapabilityInvalid(DomainError):
+    code = ErrorCode.CAPABILITY_INVALID
+
+
+class CapabilityExpired(DomainError):
+    code = ErrorCode.CAPABILITY_EXPIRED
+
+
+class CapabilityScopeDenied(DomainError):
+    code = ErrorCode.CAPABILITY_SCOPE_DENIED

@@ -72,6 +72,15 @@ def test_agent_tools_contracts(client: TestClient) -> None:
 
 
 def test_tool_execute_goes_through_unified_entry(client: TestClient) -> None:
+    token = client.app.state.container.capability.issue_for_test(
+        {
+            "issuer": "hermes",
+            "tenant_id": "tenant_A",
+            "biz_domain": "LEGAL",
+            "allowed_operations": ["legal_research_full"],
+            "expires_at": "2026-12-01T00:00:00+00:00",
+        }
+    )
     response = client.post(
         "/eag/tools/execute",
         json={
@@ -83,7 +92,7 @@ def test_tool_execute_goes_through_unified_entry(client: TestClient) -> None:
             "biz_domain": "LEGAL",
             "tool_name": "ali_farui",
             "action": "legal_research_full",
-            "capability_token": "cap_test",
+            "capability_token": token,
             "input": {"query": "合同解除条件"},
         },
     )

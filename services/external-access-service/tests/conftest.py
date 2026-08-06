@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -33,6 +34,24 @@ def container(settings: Settings) -> Container:
 @pytest.fixture
 def client(container: Container, settings: Settings) -> TestClient:
     return TestClient(create_app(container, settings))
+
+
+@pytest.fixture
+def capability_token(container: Container) -> str:
+    return container.capability.issue_for_test(
+        {
+            "issuer": "hermes",
+            "tenant_id": "tenant_A",
+            "biz_domain": "LEGAL",
+            "allowed_operations": [
+                "legal_consult",
+                "law_search",
+                "case_search",
+                "legal_research_full",
+            ],
+            "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        }
+    )
 
 
 @pytest.fixture
