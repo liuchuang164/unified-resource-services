@@ -93,9 +93,17 @@ def dispatch_request() -> Callable[..., ExternalDispatchRequest]:
     return factory
 
 
-def container_with_transport(handler: Callable[[httpx.Request], httpx.Response]) -> Container:
+def container_with_transport(
+    handler: Callable[[httpx.Request], httpx.Response],
+    *,
+    enable_mock_provider: bool = False,
+) -> Container:
     client = httpx.AsyncClient(
         base_url="https://farui.example.invalid",
         transport=farui_mock_transport(handler),
     )
-    return build_container(Settings(environment="test", allow_fake_credentials=True), client)
+    return build_container(
+        Settings(environment="test", allow_fake_credentials=True),
+        client,
+        enable_mock_provider=enable_mock_provider,
+    )
