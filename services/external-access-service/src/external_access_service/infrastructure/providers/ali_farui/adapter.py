@@ -72,11 +72,13 @@ class AliFaruiAdapter(ExternalProviderPort):
                 {"http_status": response.status_code, "provider": "ALI_FARUI"},
             )
         if response.status_code == 429:
+            retry_after = response.headers.get("retry-after")
             raise ProviderRateLimited(
                 "ALI_FARUI rate limited the request",
                 {
                     "http_status": 429,
-                    "retry_after": response.headers.get("retry-after"),
+                    "retry_after": retry_after,
+                    "retry_after_seconds": retry_after,
                     "provider_request_id": provider_request_id,
                 },
             )
