@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class ProviderCode(StrEnum):
     ALI_FARUI = "ALI_FARUI"
+    MOCK_LEGAL_PROVIDER = "MOCK_LEGAL_PROVIDER"
 
 
 class RequestSource(StrEnum):
